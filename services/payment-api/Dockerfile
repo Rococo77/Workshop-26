@@ -6,9 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq5 \
-    && rm -rf /var/lib/apt/lists/*
+# psycopg[binary] embarque sa propre libpq : pas de dépendance système requise.
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
