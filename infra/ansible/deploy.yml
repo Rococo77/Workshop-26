@@ -1,0 +1,63 @@
+---
+# ============================================================================
+#  Déploiement reproductible de la plateforme sur le PC Hôte.
+#  Place d'Ansible : automatiser les opérations prévues au cahier des charges
+#  (déploiement, déchiffrement des secrets, démarrage, vérification de santé).
+# ============================================================================
+- name: Déployer PROJECT RESILIENCE-ALPHA
+  hosts: host
+  gather_facts: false
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    with_ai: false  # true pour démarrer aussi Ollama + assistant RAG
+
+  tasks:
+    - name: Vérifier la présence de Docker
+      ansible.builtin.command: docker version
+      changed_when: false
+
+    - name: Déchiffrer les secrets vers .env (SOPS/age)
+      ansible.builtin.command: "bash scripts/secrets.sh decrypt"
+      args:
+        chdir: "{{ project_root }}"
+      changed_when: true
+      # Si SOPS n'est pas utilisé, copier manuellement .env.example -> .env.
+
+    - name: Construire et démarrer la plateforme (cœur)
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_root }}"
+        build: always
+        state: present
+      when: not with_ai
+
+    - name: Construire et démarrer la plateforme (cœur + IA)
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_root }}"
+        build: always
+        state: present
+        profiles: ["ai"]
+      when: with_ai
+
+    - name: Attendre que l'API métier soit prête
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/api/ready"
+        status_code: 200
+      register: ready
+      retries: 20
+      delay: 5
+      until: ready.status == 200
+
+    - name: Pré-charger les modèles Ollama
+      ansible.builtin.command: "docker exec ra-ollama ollama pull {{ item }}"
+      loop:
+        - "llama3.2:3b"
+        - "nomic-embed-text"
+      when: with_ai
+      changed_when: true
+
+    - name: Résumé
+      ansible.builtin.debug:
+        msg:
+          - "Plateforme déployée."
+          - "Front + API : http://127.0.0.1:8080"
+          - "Grafana      : http://127.0.0.1:3000"

@@ -1,0 +1,39 @@
+---
+# ============================================================================
+#  Opérations courantes & reprise MANUELLE (filet de secours documenté).
+#  NB : la reprise de la démonstration est AUTONOME (moteur de remédiation).
+#  Ce playbook couvre les opérations d'exploitation hors incident et le PRA
+#  manuel de dernier recours (voir docs/pca-pra.md).
+#
+#  Exemples :
+#    ansible-playbook ops.yml -e action=status
+#    ansible-playbook ops.yml -e action=restart_api
+#    ansible-playbook ops.yml -e action=backup_db
+# ============================================================================
+- name: Opérations d'exploitation
+  hosts: host
+  gather_facts: false
+  vars:
+    action: status
+
+  tasks:
+    - name: État des conteneurs
+      ansible.builtin.command: docker compose ps
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+      changed_when: false
+      when: action == "status"
+
+    - name: Redémarrage de l'API métier
+      ansible.builtin.command: docker restart ra-payment-api
+      changed_when: true
+      when: action == "restart_api"
+
+    - name: Sauvegarde logique de la base (PRA)
+      ansible.builtin.shell: >
+        docker exec ra-postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"
+        > backup_$(date +%Y%m%d_%H%M%S).sql
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+      changed_when: true
+      when: action == "backup_db"

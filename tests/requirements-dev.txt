@@ -1,0 +1,7 @@
+# Dépendances pour exécuter les tests hors conteneurs.
+pytest==8.3.3
+numpy==2.1.1
+scikit-learn==1.5.2
+# Pour les tests de garde-fous / parsing (sinon ignorés via importorskip) :
+# docker==7.1.0
+# httpx==0.27.2
