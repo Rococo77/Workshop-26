@@ -12,10 +12,14 @@ ENV MODSEC_RULE_ENGINE=On \
 # include dynamique de la blocklist alimentée par le moteur de remédiation.
 COPY default.conf.template /etc/nginx/templates/conf.d/default.conf.template
 
-# Répertoire des règles dynamiques (blocklist). Monté en volume partagé ;
-# le glob *.conf tolère l'absence de fichier au démarrage.
-# Répertoire de logs dédié, inscriptible par nginx (non-root dans cette image) ;
-# le volume nommé hérite de ces permissions à la première initialisation.
-RUN mkdir -p /etc/nginx/dynamic /var/log/ra && chmod 1777 /var/log/ra
+# Répertoire des règles dynamiques (blocklist), dans /etc/nginx possédé par nginx.
+RUN mkdir -p /etc/nginx/dynamic
+
+# Répertoire de logs dédié : /var/log appartient à root -> on le crée en root
+# puis on revient à l'utilisateur nginx de l'image (moindre privilège préservé).
+# Le volume nommé hérite de ces permissions (1777) à sa première initialisation.
+USER root
+RUN mkdir -p /var/log/ra && chmod 1777 /var/log/ra
+USER nginx
 
 EXPOSE 8080
