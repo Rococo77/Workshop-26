@@ -13,9 +13,8 @@ server {
     access_log /dev/stdout;
     error_log /dev/stderr warn;
 
-    # ModSecurity + OWASP CRS (chemin d'inclusion fourni par l'image CRS).
-    modsecurity on;
-    modsecurity_rules_file /etc/modsecurity.d/include.conf;
+    # ModSecurity + OWASP CRS sont activés GLOBALEMENT par l'image CRS
+    # (conf.d/modsecurity.conf -> setup.conf), donc actifs ici sans redéclaration.
 
     # Blocklist dynamique : le moteur de remédiation écrit ici des `deny <ip>;`
     # puis déclenche `nginx -s reload`. Le glob tolère l'absence de fichier.

@@ -22,18 +22,25 @@ log = logging.getLogger("detector.model")
 _RNG = np.random.default_rng(seed=42)  # reproductibilité
 
 
-def _nominal_profile(n: int = 3000) -> np.ndarray:
+def _nominal_profile(n: int = 4000) -> np.ndarray:
     """Trafic nominal synthétique. Ordre = config.FEATURE_NAMES.
 
-    Valeurs calées sur un démonstrateur au repos/charge légère :
-      req_rate ~ 2-8 req/s, err_ratio ~ 0, p95 ~ 20-120 ms,
-      auth_fail ~ 0-0.3/s, waf_block ~ 0.
+    Couvre toute la plage de fonctionnement ordinaire, du REPOS (idle, ~0.1 req/s)
+    à la charge normale (~15 req/s), avec peu d'erreurs, faible latence et aucun
+    blocage WAF. Ainsi le modèle ne flague ni l'idle ni la charge nominale ; seuls
+    les régimes extrêmes (flood, erreurs, blocages massifs) deviennent des outliers.
     """
-    req_rate = _RNG.normal(5.0, 1.5, n).clip(0.2, None)
-    err_ratio = np.abs(_RNG.normal(0.0, 0.01, n)).clip(0, 1)
-    p95 = _RNG.normal(0.06, 0.02, n).clip(0.005, None)
-    auth_fail = np.abs(_RNG.normal(0.05, 0.08, n)).clip(0, None)
-    waf_block = np.abs(_RNG.normal(0.0, 0.05, n)).clip(0, None)
+    # En régime ordinaire, err/auth_fail/waf_block valent le plus souvent 0
+    # (cas de l'idle réel). On modélise cette masse à zéro par un mélange,
+    # sinon le vecteur "tout à zéro" devient un outlier artificiel.
+    req_rate = _RNG.uniform(0.1, 15.0, n)            # repos -> charge normale
+    p95 = _RNG.uniform(0.01, 0.20, n)                # 10-200 ms
+    err_ratio = np.where(_RNG.random(n) < 0.90, 0.0,
+                         np.abs(_RNG.normal(0.01, 0.02, n))).clip(0, 1)
+    auth_fail = np.where(_RNG.random(n) < 0.70, 0.0,
+                         np.abs(_RNG.normal(0.10, 0.20, n)))
+    waf_block = np.where(_RNG.random(n) < 0.85, 0.0,
+                         np.abs(_RNG.normal(0.10, 0.30, n)))
     return np.column_stack([req_rate, err_ratio, p95, auth_fail, waf_block])
 
 

@@ -23,14 +23,16 @@ RNG = np.random.default_rng(42)
 FEATURES = ("req_rate", "err_ratio", "p95_latency", "auth_fail_rate", "waf_block_rate")
 
 
-def nominal(n: int = 3000) -> np.ndarray:
-    """Trafic ordinaire : charge légère, peu d'erreurs, pas de blocage WAF."""
+def nominal(n: int = 4000) -> np.ndarray:
+    """Trafic ordinaire, du repos (idle) à la charge normale : plage large de
+    req/s, peu d'erreurs, faible latence, pas de blocage WAF."""
+    # Masse à zéro pour err/auth_fail/waf_block (cas de l'idle réel).
     return np.column_stack([
-        RNG.normal(5.0, 1.5, n).clip(0.2, None),      # req/s
-        np.abs(RNG.normal(0.0, 0.01, n)).clip(0, 1),  # ratio 5xx
-        RNG.normal(0.06, 0.02, n).clip(0.005, None),  # p95 (s)
-        np.abs(RNG.normal(0.05, 0.08, n)).clip(0, None),
-        np.abs(RNG.normal(0.0, 0.05, n)).clip(0, None),
+        RNG.uniform(0.1, 15.0, n),                    # req/s (repos -> normal)
+        np.where(RNG.random(n) < 0.90, 0.0, np.abs(RNG.normal(0.01, 0.02, n))).clip(0, 1),
+        RNG.uniform(0.01, 0.20, n),                   # p95 (s)
+        np.where(RNG.random(n) < 0.70, 0.0, np.abs(RNG.normal(0.10, 0.20, n))),
+        np.where(RNG.random(n) < 0.85, 0.0, np.abs(RNG.normal(0.10, 0.30, n))),
     ])
 
 
