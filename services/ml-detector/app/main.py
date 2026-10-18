@@ -90,16 +90,16 @@ def _tick(client: httpx.Client) -> None:
         _update_state(features, score, "normal")
         return
 
-    incident_type, source_ip = sources.classify_attack(client)
+    incident_type = sources.classify_attack(client)
+    # L'IP attaquante est résolue par le moteur de remédiation (logs WAF).
     drivers = _model.top_drivers(contributions)
     _update_state(features, score, incident_type)
     DETECTIONS.labels(incident_type=incident_type).inc()
-    log.warning("ANOMALIE: type=%s score=%.2f ip=%s drivers=%s",
-                incident_type, score, source_ip, drivers)
+    log.warning("ANOMALIE: type=%s score=%.2f drivers=%s", incident_type, score, drivers)
 
     if not in_cooldown:
         _send_incident(client, {
-            "type": incident_type, "service": "payment-api", "source_ip": source_ip,
+            "type": incident_type, "service": "payment-api", "source_ip": None,
             "anomaly_score": round(score, 3),
             "detail": "features anormales: " + ", ".join(drivers) if drivers else "profil anormal",
         })
