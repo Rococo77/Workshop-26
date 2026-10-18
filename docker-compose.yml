@@ -35,6 +35,7 @@ volumes:
   loki-data:
   ollama-data:
   waf-dynamic:
+  waf-logs:
 
 services:
   # ----------------------------------------------------------------- WAF (edge)
@@ -58,6 +59,7 @@ services:
       BACKEND_BFF: "supervision-bff:8000"
     volumes:
       - waf-dynamic:/etc/nginx/dynamic
+      - waf-logs:/var/log/nginx
     networks: [edge, app]
     logging: *default-logging
     labels:
@@ -194,6 +196,18 @@ services:
     logging: *default-logging
     labels:
       ra.role: "log-shipper"
+
+  # Micro-exporter maison : logs WAF -> métriques Prometheus par statut (signal fiable)
+  waf-metrics:
+    build: ./services/waf-metrics
+    container_name: ra-waf-metrics
+    restart: unless-stopped
+    volumes:
+      - waf-logs:/var/log/nginx:ro
+    networks: [obs]
+    logging: *default-logging
+    labels:
+      ra.role: "waf-metrics"
 
   grafana:
     image: grafana/grafana:11.2.0

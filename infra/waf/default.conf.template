@@ -9,8 +9,11 @@ server {
     listen 8080;
     server_name _;
 
-    # Journaux d'accès sur stdout -> captés par Promtail -> Loki (corrélation SIEM).
+    # Journaux d'accès : stdout -> Promtail -> Loki (SIEM, extraction IP source)
+    # ET fichier -> exporter de logs -> Prometheus (métriques par statut, signal
+    # de détection fiable et temps réel).
     access_log /dev/stdout;
+    access_log /var/log/nginx/ra_access.log combined;
     error_log /dev/stderr warn;
 
     # ModSecurity + OWASP CRS sont activés GLOBALEMENT par l'image CRS

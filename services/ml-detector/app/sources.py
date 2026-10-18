@@ -37,21 +37,31 @@ def _prom_scalar(client: httpx.Client, query: str) -> float:
 
 
 def collect_features(client: httpx.Client) -> dict[str, float]:
-    """Vecteur de features aligné sur config.FEATURE_NAMES."""
-    req_rate = _prom_scalar(
+    """Vecteur de features aligné sur config.FEATURE_NAMES.
+
+    req_rate et waf_block_rate proviennent des métriques du WAF (exporter de logs
+    nginx -> Prometheus) : signal fiable et temps réel, non dampé par le
+    rate-limiting (le WAF voit TOUT le trafic entrant, y compris ce qu'il rejette).
+    Repli sur les métriques de l'API métier si l'exporter n'est pas encore prêt.
+    """
+    waf_total = _prom_scalar(client, "sum(rate(nginx_http_response_count_total[1m]))")
+    api_rate = _prom_scalar(
         client, 'sum(rate(http_requests_total{service="payment-api"}[1m]))')
+    req_rate = max(waf_total, api_rate)  # charge entrante réelle
+
     err_rate = _prom_scalar(
         client, 'sum(rate(http_requests_total{service="payment-api",status=~"5.."}[1m]))')
-    err_ratio = (err_rate / req_rate) if req_rate > 0 else 0.0
+    err_ratio = (err_rate / api_rate) if api_rate > 0 else 0.0
     p95 = _prom_scalar(
         client,
         'histogram_quantile(0.95, sum(rate('
         'http_request_duration_seconds_bucket{service="payment-api"}[1m])) by (le))')
     auth_fail = _prom_scalar(client, "sum(rate(auth_login_failures_total[1m]))")
-    waf_block = waf_block_rate(client)
+    waf_block = _prom_scalar(
+        client, 'sum(rate(nginx_http_response_count_total{status=~"403|429"}[1m]))')
 
     return {
-        "req_rate": req_rate,
+        "req_rate": req_rate if req_rate == req_rate else 0.0,
         "err_ratio": err_ratio if err_ratio == err_ratio else 0.0,  # garde NaN
         "p95_latency": p95 if p95 == p95 else 0.0,
         "auth_fail_rate": auth_fail,
@@ -77,17 +87,6 @@ def _query_waf_logs(client: httpx.Client, window_s: int = 60) -> list[str]:
     except (httpx.HTTPError, KeyError, ValueError) as exc:
         log.warning("requête Loki échouée: %s", exc)
         return []
-
-
-def waf_block_rate(client: httpx.Client, window_s: int = 60) -> float:
-    """Taux de requêtes rejetées par le WAF (status 403/429) par seconde."""
-    lines = _query_waf_logs(client, window_s)
-    blocked = 0
-    for line in lines:
-        m = _ACCESS_RE.match(line)
-        if m and m.group(2) in ("403", "429"):
-            blocked += 1
-    return blocked / window_s
 
 
 def classify_attack(client: httpx.Client, window_s: int = 60) -> tuple[str, str | None]:
