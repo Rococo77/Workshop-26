@@ -42,12 +42,15 @@ def _wait_recovery(result: RemediationResult, attempts: int = 6, delay: float = 
 
 def handle_dos_flood(source_ip: str | None, service: str) -> RemediationResult:
     r = RemediationResult("dos_flood")
+    # Si le détecteur n'a pas fourni d'IP, on la résout depuis les logs WAF.
+    if not source_ip:
+        source_ip = actions.top_attacker_ip()
     if source_ip:
         ok = actions.block_ip(source_ip)
         r.contained = ok
         r.step(f"blocage IP source {source_ip} au WAF: {'OK' if ok else 'ÉCHEC'}")
     else:
-        r.step("aucune IP source fournie — mitigation par rate-limit WAF (baseline)")
+        r.step("aucune IP source identifiée — mitigation par rate-limit WAF (baseline)")
 
     # Si l'API a saturé au point de devenir malsaine, on la relance une fois.
     container = {"payment-api": "ra-payment-api", "auth": "ra-auth"}.get(service)
@@ -77,6 +80,8 @@ def handle_injection_attempt(source_ip: str | None) -> RemediationResult:
     On contient (blocage source) et on trace ; on ne 'répare' pas un service
     qui, lui, répond toujours. La preuve attendue est le confinement + le log."""
     r = RemediationResult("injection_attempt")
+    if not source_ip:
+        source_ip = actions.top_attacker_ip()
     if source_ip:
         ok = actions.block_ip(source_ip)
         r.contained = ok

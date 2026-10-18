@@ -8,7 +8,10 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import re
 import threading
+import time
+from collections import Counter
 from pathlib import Path
 
 import docker
@@ -21,6 +24,9 @@ log = logging.getLogger("remediation.actions")
 _docker = docker.from_env()
 _blocked_ips: set[str] = set()
 _lock = threading.Lock()
+
+# Ligne access nginx : "<ip> - - [date] \"METHOD path\" <status> ..."
+_ACCESS_RE = re.compile(r'^(\d{1,3}(?:\.\d{1,3}){3})\s.*"\s*\S+ [^"]*"\s+(\d{3})')
 
 
 def _valid_ip(ip: str) -> bool:
@@ -90,6 +96,35 @@ def restart_container(name: str) -> bool:
     except docker.errors.APIError as exc:
         log.error("erreur API Docker au restart %s: %s", name, exc)
         return False
+
+
+def top_attacker_ip(window_s: int = 120) -> str | None:
+    """Résout l'IP attaquante en lisant directement les journaux du WAF
+    (docker logs), indépendamment de la latence d'ingestion de Loki.
+
+    On ne retient que les IP générant des rejets (403/429) : ce sont des clients
+    externes malveillants, jamais les services internes. Retourne la plus active.
+    """
+    try:
+        waf = _docker.containers.get(config.WAF_CONTAINER)
+        raw = waf.logs(since=int(time.time()) - window_s).decode("utf-8", errors="replace")
+    except docker.errors.NotFound:
+        log.error("conteneur WAF introuvable pour la résolution d'IP")
+        return None
+    except docker.errors.APIError as exc:
+        log.error("lecture des logs WAF impossible: %s", exc)
+        return None
+
+    counts: Counter[str] = Counter()
+    for line in raw.splitlines():
+        m = _ACCESS_RE.match(line)
+        if m and m.group(2) in ("403", "429") and _valid_ip(m.group(1)):
+            counts[m.group(1)] += 1
+    if not counts:
+        return None
+    ip, n = counts.most_common(1)[0]
+    log.info("IP attaquante résolue depuis les logs WAF: %s (%d rejets)", ip, n)
+    return ip
 
 
 def verify_canary(timeout: float = 5.0) -> bool:
