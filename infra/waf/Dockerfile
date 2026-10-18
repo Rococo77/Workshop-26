@@ -14,6 +14,8 @@ COPY default.conf.template /etc/nginx/templates/conf.d/default.conf.template
 
 # Répertoire des règles dynamiques (blocklist). Monté en volume partagé ;
 # le glob *.conf tolère l'absence de fichier au démarrage.
-RUN mkdir -p /etc/nginx/dynamic
+# Répertoire de logs dédié, inscriptible par nginx (non-root dans cette image) ;
+# le volume nommé hérite de ces permissions à la première initialisation.
+RUN mkdir -p /etc/nginx/dynamic /var/log/ra && chmod 1777 /var/log/ra
 
 EXPOSE 8080

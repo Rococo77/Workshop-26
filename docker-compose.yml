@@ -59,7 +59,7 @@ services:
       BACKEND_BFF: "supervision-bff:8000"
     volumes:
       - waf-dynamic:/etc/nginx/dynamic
-      - waf-logs:/var/log/nginx
+      - waf-logs:/var/log/ra
     networks: [edge, app]
     logging: *default-logging
     labels:
@@ -202,8 +202,13 @@ services:
     build: ./services/waf-metrics
     container_name: ra-waf-metrics
     restart: unless-stopped
+    # Le WAF initialise le volume de logs en premier (permissions d'écriture).
+    depends_on:
+      - waf
+    environment:
+      WAF_ACCESS_LOG: "/var/log/ra/ra_access.log"
     volumes:
-      - waf-logs:/var/log/nginx:ro
+      - waf-logs:/var/log/ra:ro
     networks: [obs]
     logging: *default-logging
     labels:
