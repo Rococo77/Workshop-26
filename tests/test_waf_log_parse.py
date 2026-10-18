@@ -7,9 +7,9 @@ import pytest
 
 pytest.importorskip("httpx")
 
-from conftest import load_module  # noqa: E402
+from conftest import load_service_module  # noqa: E402
 
-sources = load_module("det_sources", "services/ml-detector/app/sources.py")
+sources = load_service_module("det", "services/ml-detector", "sources")
 
 
 def test_parse_ligne_access_nginx():

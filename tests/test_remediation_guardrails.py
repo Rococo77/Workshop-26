@@ -9,10 +9,10 @@ import pytest
 pytest.importorskip("docker")
 pytest.importorskip("httpx")
 
-from conftest import load_module  # noqa: E402
+from conftest import load_service_module  # noqa: E402
 
-actions = load_module("rem_actions", "services/remediation-engine/app/actions.py")
-config = load_module("rem_config", "services/remediation-engine/app/config.py")
+config = load_service_module("rem", "services/remediation-engine", "config")
+actions = load_service_module("rem", "services/remediation-engine", "actions")
 
 
 def test_block_ip_refuse_ip_invalide(tmp_path, monkeypatch):

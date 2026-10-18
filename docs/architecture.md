@@ -98,7 +98,9 @@ Points clés de conception :
 - **Features** : `req_rate` et `waf_block_rate` proviennent des métriques du WAF
   (micro-exporter de logs nginx → Prometheus) : signal temps réel non dampé par
   le rate-limiting. `err_ratio`, `p95_latency` (API métier), `auth_fail_rate`
-  (auth). L'IP source est extraite des logs WAF via Loki (corrélation SIEM).
+  (auth). L'IP attaquante est résolue par le moteur de remédiation directement
+  depuis les journaux du conteneur WAF (fiable, sans latence d'ingestion) ;
+  Loki alimente la corrélation SIEM et le dashboard.
 - **Préparation** : standardisation (z-score) sur le profil nominal.
 - **Résultats** (jeu synthétique, `ml/train.py`) : rappel ~100 %, faux positifs
   ~5 % sur le profil de démonstration.
