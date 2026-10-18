@@ -9,6 +9,10 @@ server {
     listen 8080;
     server_name _;
 
+    # Journaux d'accès sur stdout -> captés par Promtail -> Loki (corrélation SIEM).
+    access_log /dev/stdout;
+    error_log /dev/stderr warn;
+
     # ModSecurity + OWASP CRS (chemin d'inclusion fourni par l'image CRS).
     modsecurity on;
     modsecurity_rules_file /etc/modsecurity.d/include.conf;
