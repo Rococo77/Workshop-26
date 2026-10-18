@@ -3,24 +3,24 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from .config import settings
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """Vérifie un mot de passe contre un hash bcrypt ($2a$/$2b$), y compris les
+    hash générés par pgcrypto. bcrypt directement, passlib étant non maintenu."""
     try:
-        return _pwd.verify(plain, hashed)
-    except ValueError:
-        # Hash malformé en base -> échec propre, pas de 500.
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        # Hash malformé ou mot de passe hors format -> échec propre, pas de 500.
         return False
 
 
 def hash_password(plain: str) -> str:
-    return _pwd.hash(plain)
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(*, subject: str, role: str) -> str:
