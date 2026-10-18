@@ -34,6 +34,7 @@ volumes:
   prometheus-data:
   loki-data:
   ollama-data:
+  waf-dynamic:
 
 services:
   # ----------------------------------------------------------------- WAF (edge)
@@ -53,6 +54,8 @@ services:
       BACKEND_FRONTEND: "frontend:5173"
       BACKEND_API: "payment-api:8000"
       BACKEND_AUTH: "auth:8000"
+    volumes:
+      - waf-dynamic:/etc/nginx/dynamic
     networks: [edge, app]
     logging: *default-logging
     labels:
@@ -235,14 +238,16 @@ services:
     restart: unless-stopped
     environment:
       REMEDIATION_API_TOKEN: ${REMEDIATION_API_TOKEN}
-      WAF_ADMIN_URL: "http://waf:8081"
+      WAF_CONTAINER: "ra-waf"
+      WAF_DYNAMIC_DIR: "/waf-dynamic"
       CANARY_TARGET: "http://payment-api:8000"
-      COMPOSE_PROJECT: "resilience-alpha"
     volumes:
-      # Accès socket en lecture : surface sensible, réseau `control` isolé,
-      # aucune UI d'admin exposée (sujet §3.4). Durcissement documenté.
+      # Accès socket Docker : surface sensible -> réseau `control` isolé,
+      # aucune UI d'admin exposée (sujet §3.4). Durcissement documenté (docs/).
       - /var/run/docker.sock:/var/run/docker.sock
-    networks: [control, obs]
+      # Volume partagé avec le WAF : écriture de la blocklist dynamique.
+      - waf-dynamic:/waf-dynamic
+    networks: [control, obs, app]
     logging: *default-logging
     labels:
       ra.role: "remediation"

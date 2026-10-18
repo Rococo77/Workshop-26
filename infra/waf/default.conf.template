@@ -1,0 +1,56 @@
+# ============================================================================
+#  WAF — reverse proxy durci (ModSecurity + CRS actifs au niveau http via
+#  la configuration de l'image). Contexte http : zone de limitation par IP.
+# ============================================================================
+limit_req_zone $binary_remote_addr zone=perip:10m rate=50r/s;
+limit_req_status 429;
+
+server {
+    listen 8080;
+    server_name _;
+
+    # ModSecurity + OWASP CRS (chemin d'inclusion fourni par l'image CRS).
+    modsecurity on;
+    modsecurity_rules_file /etc/modsecurity.d/include.conf;
+
+    # Blocklist dynamique : le moteur de remédiation écrit ici des `deny <ip>;`
+    # puis déclenche `nginx -s reload`. Le glob tolère l'absence de fichier.
+    include /etc/nginx/dynamic/*.conf;
+
+    # En-têtes de durcissement.
+    server_tokens off;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+
+    # Taille de corps bornée (anti-abus).
+    client_max_body_size 256k;
+
+    location /auth/ {
+        limit_req zone=perip burst=20 nodelay;
+        proxy_pass http://${BACKEND_AUTH}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 10s;
+    }
+
+    location /api/ {
+        limit_req zone=perip burst=20 nodelay;
+        proxy_pass http://${BACKEND_API}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 10s;
+    }
+
+    # L'endpoint interne /internal ne doit JAMAIS être exposé via le WAF.
+    location /api/internal/ { return 404; }
+
+    location / {
+        proxy_pass http://${BACKEND_FRONTEND}/;
+        proxy_set_header Host $host;
+    }
+
+    location /waf-health { default_type text/plain; return 200 "waf-ok\n"; }
+}

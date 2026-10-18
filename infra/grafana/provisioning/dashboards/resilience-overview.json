@@ -1,0 +1,69 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "title": "Resilience-Alpha — Supervision",
+  "tags": ["resilience-alpha"],
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "5s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Disponibilité services (up)",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "up{job=~\"payment-api|auth\"}", "legendFormat": "{{service}}" }],
+      "fieldConfig": { "defaults": { "mappings": [
+        { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+      ], "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Taux de requêtes API métier (req/s)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(http_requests_total{service=\"payment-api\"}[1m]))", "legendFormat": "req/s" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ratio d'erreurs 5xx",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(http_requests_total{service=\"payment-api\",status=~\"5..\"}[1m])) / clamp_min(sum(rate(http_requests_total{service=\"payment-api\"}[1m])),0.001)", "legendFormat": "ratio 5xx" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1 } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latence p95 (s)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service=\"payment-api\"}[1m])) by (le))", "legendFormat": "p95" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Échecs d'authentification (/s)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum(rate(auth_login_failures_total[1m])) by (reason)", "legendFormat": "{{reason}}" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Score d'anomalie ML & remédiations",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "anomaly_score", "legendFormat": "score anomalie" },
+        { "expr": "sum(increase(remediation_actions_total[1m])) by (playbook)", "legendFormat": "remediation {{playbook}}" }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Journaux corrélés (SIEM / Loki)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service=~\"business-api|auth|waf|remediation|ml-detector\"}" }]
+    }
+  ]
+}

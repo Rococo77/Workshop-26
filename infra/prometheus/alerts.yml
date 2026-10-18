@@ -1,0 +1,38 @@
+# Règles Prometheus — filet secondaire et visualisation jury.
+# NB : le détecteur PRIMAIRE est le modèle ML (ml-detector). Ces règles
+# servent de garde-fou explicite et alimentent le panneau d'alertes Grafana ;
+# elles ne constituent pas, à elles seules, le mécanisme de détection (sujet §3.3).
+groups:
+  - name: resilience-alpha
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"payment-api|auth"} == 0
+        for: 15s
+        labels: { severity: critical }
+        annotations:
+          summary: "Service {{ $labels.service }} injoignable"
+
+      - alert: HighErrorRatio
+        expr: >
+          sum(rate(http_requests_total{service="payment-api",status=~"5.."}[1m]))
+          / clamp_min(sum(rate(http_requests_total{service="payment-api"}[1m])), 0.001) > 0.2
+        for: 20s
+        labels: { severity: critical }
+        annotations:
+          summary: "Taux d'erreur 5xx > 20% sur l'API métier"
+
+      - alert: HighLatencyP95
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{service="payment-api"}[1m])) by (le)) > 1.5
+        for: 20s
+        labels: { severity: warning }
+        annotations:
+          summary: "Latence p95 API > 1.5s (saturation probable)"
+
+      - alert: AuthFailureSpike
+        expr: sum(rate(auth_login_failures_total[1m])) > 5
+        for: 15s
+        labels: { severity: warning }
+        annotations:
+          summary: "Pic d'échecs d'authentification (brute force probable)"
