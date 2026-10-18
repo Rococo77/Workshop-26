@@ -46,6 +46,7 @@ services:
       - frontend
       - payment-api
       - auth
+      - supervision-bff
     ports:
       # Unique interface publiée, bindée sur l'IP du PC Hôte (sujet §4).
       # En local/CI, 0.0.0.0 ; en démo, remplacer par 192.168.137.1.
@@ -54,6 +55,7 @@ services:
       BACKEND_FRONTEND: "frontend:5173"
       BACKEND_API: "payment-api:8000"
       BACKEND_AUTH: "auth:8000"
+      BACKEND_BFF: "supervision-bff:8000"
     volumes:
       - waf-dynamic:/etc/nginx/dynamic
     networks: [edge, app]
@@ -212,6 +214,22 @@ services:
     logging: *default-logging
     labels:
       ra.role: "supervision"
+
+  # ------------------------------------- BFF supervision (lecture seule, dashboard)
+  supervision-bff:
+    build: ./services/supervision-bff
+    container_name: ra-supervision-bff
+    restart: unless-stopped
+    environment:
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+      DETECTOR_URL: "http://ml-detector:9100"
+      REMEDIATION_URL: "http://remediation-engine:9000"
+    # app -> joignable par le WAF ; obs/control -> lecture de l'état (aucun droit
+    # d'action : seule l'écriture /incident du moteur exige le jeton interne).
+    networks: [app, obs, control]
+    logging: *default-logging
+    labels:
+      ra.role: "supervision-bff"
 
   # -------------------------------------------------------- Détection ML (AIOps)
   ml-detector:

@@ -1,0 +1,62 @@
+"""BFF de supervision — agrégation LECTURE SEULE pour le dashboard React.
+
+N'exécute aucune action privilégiée : il interroge en GET l'état du détecteur,
+du moteur de remédiation et de Prometheus, puis renvoie une vue consolidée.
+Exposé via le WAF (observation jury), sans pouvoir déclencher de remédiation.
+"""
+from __future__ import annotations
+
+import logging
+import os
+
+import httpx
+from fastapi import FastAPI
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("bff")
+
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
+DETECTOR_URL = os.getenv("DETECTOR_URL", "http://ml-detector:9100")
+REMEDIATION_URL = os.getenv("REMEDIATION_URL", "http://remediation-engine:9000")
+
+app = FastAPI(title="Resilience-Alpha Supervision BFF", version="1.0.0")
+
+
+def _get_json(client: httpx.Client, url: str, default):
+    try:
+        r = client.get(url, timeout=4)
+        r.raise_for_status()
+        return r.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("source indisponible %s: %s", url, exc)
+        return default
+
+
+def _services_up(client: httpx.Client) -> dict[str, bool]:
+    data = _get_json(client, f"{PROMETHEUS_URL}/api/v1/query?query=up",
+                     {"data": {"result": []}})
+    out: dict[str, bool] = {}
+    for item in data.get("data", {}).get("result", []):
+        svc = item["metric"].get("service") or item["metric"].get("job", "?")
+        out[svc] = float(item["value"][1]) == 1.0
+    return out
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/overview")
+def overview() -> dict:
+    """Vue consolidée : services, détection, remédiation."""
+    with httpx.Client() as client:
+        services = _services_up(client)
+        detector = _get_json(client, f"{DETECTOR_URL}/state", {})
+        remediation = _get_json(client, f"{REMEDIATION_URL}/status",
+                                {"events": [], "blocked_ips": []})
+    return {
+        "services": services,
+        "detector": detector,
+        "remediation": remediation,
+    }

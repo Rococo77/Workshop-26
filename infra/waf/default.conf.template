@@ -47,9 +47,21 @@ server {
     # L'endpoint interne /internal ne doit JAMAIS être exposé via le WAF.
     location /api/internal/ { return 404; }
 
+    # Supervision (lecture seule) pour le dashboard React.
+    location /supervision/ {
+        limit_req zone=perip burst=30 nodelay;
+        proxy_pass http://${BACKEND_BFF}/;
+        proxy_set_header Host $host;
+        proxy_read_timeout 10s;
+    }
+
     location / {
         proxy_pass http://${BACKEND_FRONTEND}/;
         proxy_set_header Host $host;
+        # Support du HMR Vite (websocket) en développement.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 
     location /waf-health { default_type text/plain; return 200 "waf-ok\n"; }
