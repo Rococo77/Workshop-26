@@ -65,7 +65,7 @@ def _send_incident(client: httpx.Client, payload: dict) -> None:
 
 def _detection_loop() -> None:
     log.info("boucle de détection démarrée (intervalle=%ss)", config.DETECTION_INTERVAL_SECONDS)
-    with httpx.Client() as client:
+    with httpx.Client(timeout=10) as client:
         while not _stop.is_set():
             try:
                 _tick(client)

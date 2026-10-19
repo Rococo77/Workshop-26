@@ -50,7 +50,7 @@ def health() -> dict[str, str]:
 @app.get("/overview")
 def overview() -> dict:
     """Vue consolidée : services, détection, remédiation."""
-    with httpx.Client() as client:
+    with httpx.Client(timeout=5) as client:
         services = _services_up(client)
         detector = _get_json(client, f"{DETECTOR_URL}/state", {})
         remediation = _get_json(
