@@ -304,7 +304,8 @@ services:
   # Profil `ai` : démarrage à la demande (RAM). Ollama peut tourner sur le
   # 3e PC (délestage IA) en pointant OLLAMA_BASE_URL vers son IP.
   ollama:
-    image: ollama/ollama:0.3.12
+    # >= 0.6.6 requis pour l'architecture Qwen3 (et le pull hf.co/...).
+    image: ollama/ollama:0.12.6
     container_name: ra-ollama
     restart: unless-stopped
     volumes:
@@ -322,7 +323,7 @@ services:
     depends_on: [ollama]
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M}
       RAG_EMBED_MODEL: ${RAG_EMBED_MODEL:-nomic-embed-text}
     volumes:
       - ./docs:/app/corpus:ro

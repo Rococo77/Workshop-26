@@ -10,6 +10,8 @@
   vars:
     project_root: "{{ playbook_dir }}/../.."
     with_ai: false  # true pour démarrer aussi Ollama + assistant RAG
+    # Qwen3 4B par défaut ; 8B : -e ollama_model=hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M
+    ollama_model: "hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M"
 
   tasks:
     - name: Vérifier la présence de Docker
@@ -50,7 +52,7 @@
     - name: Pré-charger les modèles Ollama
       ansible.builtin.command: "docker exec ra-ollama ollama pull {{ item }}"
       loop:
-        - "llama3.2:3b"
+        - "{{ ollama_model }}"
         - "nomic-embed-text"
       when: with_ai
       changed_when: true

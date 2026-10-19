@@ -94,7 +94,7 @@ docker kill ra-payment-api     # le détecteur voit up==0 -> restart auto -> can
 | `api/ready` en 503 | Postgres pas encore prêt | attendre le healthcheck, `docker compose logs postgres` |
 | Pas de détection | Loki/Prometheus pas scrapés | `docker compose logs ml-detector`, vérifier `/metrics` |
 | WAF ne bloque pas | reload échoué | `docker logs ra-remediation`, vérifier le volume `waf-dynamic` |
-| RAG en 503 | Ollama absent / modèle non pull | `docker compose --profile ai up -d`, `docker exec ra-ollama ollama pull llama3.2:3b` |
+| RAG en 503 | Ollama absent / modèle non pull | `docker compose --profile ai up -d`, `docker exec ra-ollama ollama pull hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M` |
 | Front inaccessible | Vite pas démarré | `docker compose logs frontend` |
 
 ## 8. Arrêt / remise à zéro

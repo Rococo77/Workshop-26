@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -22,9 +23,10 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("rag")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M")
 EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "nomic-embed-text")
 CORPUS_DIR = os.getenv("CORPUS_DIR", "/app/corpus")
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 app = FastAPI(title="Resilience-Alpha RAG Assistant", version="1.0.0")
 _retriever = None  # construit paresseusement
@@ -87,7 +89,7 @@ def ask(question: Question) -> Answer:
                     "system",
                     "Tu es un assistant d'exploitation. Réponds en français, "
                     "de façon concise, UNIQUEMENT à partir du contexte fourni. "
-                    "Si l'information n'y est pas, dis-le.",
+                    "Si l'information n'y est pas, dis-le. /no_think",
                 ),
                 ("human", "Contexte :\n{context}\n\nQuestion : {q}"),
             ]
@@ -95,7 +97,9 @@ def ask(question: Question) -> Answer:
         llm = ChatOllama(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL, temperature=0)
         chain = prompt | llm
         resp = chain.invoke({"context": context, "q": question.q})
-        return Answer(answer=resp.content, sources=sources)
+        # Qwen3 émet un bloc <think> (vide avec /no_think) : jamais montré à l'opérateur.
+        answer = _THINK.sub("", resp.content).strip()
+        return Answer(answer=answer, sources=sources)
     except Exception as exc:
         log.error("RAG indisponible: %s", exc)
         raise HTTPException(503, f"assistant indisponible (Ollama requis): {exc}") from exc
