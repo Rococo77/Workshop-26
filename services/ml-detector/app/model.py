@@ -9,6 +9,7 @@ comportement ordinaire de la plateforme.
 Explicabilité : à chaque alerte, on calcule l'écart normalisé (z-score) de
 chaque feature par rapport au profil nominal pour dire POURQUOI c'est anormal.
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,14 +34,11 @@ def _nominal_profile(n: int = 4000) -> np.ndarray:
     # En régime ordinaire, err/auth_fail/waf_block valent le plus souvent 0
     # (cas de l'idle réel). On modélise cette masse à zéro par un mélange,
     # sinon le vecteur "tout à zéro" devient un outlier artificiel.
-    req_rate = _RNG.uniform(0.1, 15.0, n)            # repos -> charge normale
-    p95 = _RNG.uniform(0.01, 0.20, n)                # 10-200 ms
-    err_ratio = np.where(_RNG.random(n) < 0.90, 0.0,
-                         np.abs(_RNG.normal(0.01, 0.02, n))).clip(0, 1)
-    auth_fail = np.where(_RNG.random(n) < 0.70, 0.0,
-                         np.abs(_RNG.normal(0.10, 0.20, n)))
-    waf_block = np.where(_RNG.random(n) < 0.85, 0.0,
-                         np.abs(_RNG.normal(0.10, 0.30, n)))
+    req_rate = _RNG.uniform(0.1, 15.0, n)  # repos -> charge normale
+    p95 = _RNG.uniform(0.01, 0.20, n)  # 10-200 ms
+    err_ratio = np.where(_RNG.random(n) < 0.90, 0.0, np.abs(_RNG.normal(0.01, 0.02, n))).clip(0, 1)
+    auth_fail = np.where(_RNG.random(n) < 0.70, 0.0, np.abs(_RNG.normal(0.10, 0.20, n)))
+    waf_block = np.where(_RNG.random(n) < 0.85, 0.0, np.abs(_RNG.normal(0.10, 0.30, n)))
     return np.column_stack([req_rate, err_ratio, p95, auth_fail, waf_block])
 
 
@@ -74,8 +72,7 @@ class AnomalyModel:
         norm = float(np.clip(0.5 - raw, 0.0, 1.0))
 
         contributions = {
-            name: round(float(std_vec[0, i]), 2)
-            for i, name in enumerate(config.FEATURE_NAMES)
+            name: round(float(std_vec[0, i]), 2) for i, name in enumerate(config.FEATURE_NAMES)
         }
         return is_anomaly, norm, contributions
 

@@ -1,0 +1,43 @@
+# Configuration outillage qualité, partagée par tous les services Python
+# (lint, tests, couverture). Les dépendances runtime restent dans chaque
+# services/<svc>/requirements.txt : chaque image n'embarque que les siennes.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["services/frontend", "**/node_modules"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # tri des imports
+  "B",        # bugbear (bugs probables)
+  "UP",       # syntaxe moderne
+  "S",        # sécurité (règles bandit)
+]
+ignore = [
+  "S101",  # assert : légitime dans les tests
+  "S104",  # bind 0.0.0.0 : voulu en conteneur
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# Idiome FastAPI : Depends()/Header() en valeur par défaut est le mécanisme d'injection.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.params.Depends"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts Red Team : URL cible fournie volontairement par l'opérateur.
+"attack/*.py" = ["S310"]
+# Tests / sondes santé : appels HTTP locaux maîtrisés.
+"tests/**" = ["S310"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "e2e: tests de bout en bout contre une plateforme déployée (docker compose)",
+]
+
+[tool.coverage.run]
+source = ["services", "ml"]
+omit = ["**/tests/**", "services/frontend/**"]

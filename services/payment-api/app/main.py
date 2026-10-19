@@ -5,6 +5,7 @@ Endpoint interne (non exposé au réseau pédagogique) : /internal/canary,
 utilisé par le moteur de remédiation pour prouver le retour à un état
 utilisable (transaction canari réelle en base).
 """
+
 from __future__ import annotations
 
 import logging
@@ -49,7 +50,7 @@ def ready() -> dict[str, str]:
         return {"status": "ready"}
     except Exception as exc:
         log.warning("not ready: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable") from exc
 
 
 @app.get("/metrics")
@@ -69,7 +70,7 @@ def my_accounts(principal: Principal = Depends(current_principal)) -> list[dict]
         return rows
     except Exception as exc:
         log.error("accounts query failed: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
 
 
 @app.post("/transactions", status_code=status.HTTP_201_CREATED)
@@ -79,7 +80,7 @@ def create_transaction(
     try:
         amount = Decimal(req.amount)
     except (InvalidOperation, ValueError):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid amount")
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid amount") from None
 
     try:
         tx = service.transfer(
@@ -89,15 +90,21 @@ def create_transaction(
             amount=amount,
         )
         PAYMENT_TX.labels(result="settled").inc()
-        return {"id": tx["id"], "reference": tx["reference"], "status": tx["status"],
-                "amount": str(tx["amount"])}
+        return {
+            "id": tx["id"],
+            "reference": tx["reference"],
+            "status": tx["status"],
+            "amount": str(tx["amount"]),
+        }
     except service.BusinessError as exc:
         PAYMENT_TX.labels(result="rejected").inc()
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     except Exception as exc:
         PAYMENT_TX.labels(result="error").inc()
         log.error("transfer failed: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "transfer backend unavailable")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "transfer backend unavailable"
+        ) from exc
 
 
 @app.get("/transactions")
@@ -115,7 +122,7 @@ def list_transactions(
         return rows
     except Exception as exc:
         log.error("tx list failed: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
 
 
 @app.post("/internal/canary")
@@ -124,15 +131,18 @@ def canary() -> dict:
     (auth implicite seed -> débit -> crédit -> écriture). Non exposé via WAF."""
     try:
         tx = service.transfer(
-            username=CANARY_USER, src_account=CANARY_SRC, dst_account=CANARY_DST,
-            amount=Decimal("1.00"), is_canary=True,
+            username=CANARY_USER,
+            src_account=CANARY_SRC,
+            dst_account=CANARY_DST,
+            amount=Decimal("1.00"),
+            is_canary=True,
         )
         PAYMENT_TX.labels(result="canary_ok").inc()
         return {"canary": "ok", "reference": tx["reference"]}
     except Exception as exc:
         PAYMENT_TX.labels(result="canary_fail").inc()
         log.error("canary failed: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"canary failed: {exc}")
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, f"canary failed: {exc}") from exc
 
 
 @app.exception_handler(Exception)

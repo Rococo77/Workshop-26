@@ -6,6 +6,7 @@ et traitement d'une compromission.
   - injection_attempt                -> contenir et tracer, sans prétendre que
                                         "le service est revenu" (pas de même réponse).
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,8 +65,9 @@ def handle_dos_flood(source_ip: str | None, service: str) -> RemediationResult:
 
 def handle_service_unavailable(service: str) -> RemediationResult:
     r = RemediationResult("service_unavailable")
-    container = {"payment-api": "ra-payment-api", "auth": "ra-auth",
-                 "frontend": "ra-frontend"}.get(service, "ra-payment-api")
+    container = {"payment-api": "ra-payment-api", "auth": "ra-auth", "frontend": "ra-frontend"}.get(
+        service, "ra-payment-api"
+    )
     if actions.restart_container(container):
         r.step(f"redémarrage {container} effectué")
         r.contained = True
@@ -85,8 +87,10 @@ def handle_injection_attempt(source_ip: str | None) -> RemediationResult:
     if source_ip:
         ok = actions.block_ip(source_ip)
         r.contained = ok
-        r.step(f"blocage IP source {source_ip}: {'OK' if ok else 'ÉCHEC'} "
-               f"(CRS a déjà rejeté les requêtes malveillantes)")
+        r.step(
+            f"blocage IP source {source_ip}: {'OK' if ok else 'ÉCHEC'} "
+            f"(CRS a déjà rejeté les requêtes malveillantes)"
+        )
     else:
         r.step("injection confinée par le WAF/CRS ; pas d'IP isolée à bloquer")
     # Service toujours disponible : on vérifie qu'il l'est resté.

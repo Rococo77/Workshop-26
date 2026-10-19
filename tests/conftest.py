@@ -5,6 +5,7 @@ et utilisent des imports relatifs (`from . import config`). On enregistre donc
 le dossier `app/` de chaque service comme un package nommé, avec un `__path__`,
 afin que les imports relatifs se résolvent correctement.
 """
+
 from __future__ import annotations
 
 import importlib.util

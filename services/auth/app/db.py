@@ -1,8 +1,9 @@
 """Accès base — pool de connexions psycopg3, requêtes paramétrées uniquement."""
+
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 import psycopg
 from psycopg.rows import dict_row
@@ -29,8 +30,7 @@ def fetch_user(username: str) -> dict | None:
     """Lecture d'un utilisateur. Requête paramétrée (anti-injection)."""
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT id, username, password_hash, role, locked "
-            "FROM app_user WHERE username = %s",
+            "SELECT id, username, password_hash, role, locked " "FROM app_user WHERE username = %s",
             (username,),
         ).fetchone()
     return row

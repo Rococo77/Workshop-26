@@ -3,6 +3,7 @@
 Toutes les opérations privilégiées (Docker, WAF) passent par ici afin de
 centraliser les garde-fous (allowlist, idempotence) et la traçabilité.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -21,12 +22,21 @@ from . import config
 
 log = logging.getLogger("remediation.actions")
 
-_docker = docker.from_env()
+_docker: docker.DockerClient | None = None
 _blocked_ips: set[str] = set()
 _lock = threading.Lock()
 
 # Ligne access nginx : "<ip> - - [date] \"METHOD path\" <status> ..."
 _ACCESS_RE = re.compile(r'^(\d{1,3}(?:\.\d{1,3}){3})\s.*"\s*\S+ [^"]*"\s+(\d{3})')
+
+
+def _client() -> docker.DockerClient:
+    """Client Docker créé au premier usage : un socket indisponible au démarrage
+    ne doit pas empêcher le moteur de démarrer (erreur levée à l'action, gérée)."""
+    global _docker
+    if _docker is None:
+        _docker = docker.from_env()
+    return _docker
 
 
 def _valid_ip(ip: str) -> bool:
@@ -65,7 +75,7 @@ def block_ip(ip: str) -> bool:
 
 def _reload_waf() -> bool:
     try:
-        waf = _docker.containers.get(config.WAF_CONTAINER)
+        waf = _client().containers.get(config.WAF_CONTAINER)
         res = waf.exec_run(["nginx", "-s", "reload"])
         if res.exit_code != 0:
             log.error("reload WAF échoué: %s", res.output.decode(errors="replace"))
@@ -75,7 +85,7 @@ def _reload_waf() -> bool:
     except docker.errors.NotFound:
         log.error("conteneur WAF %s introuvable", config.WAF_CONTAINER)
         return False
-    except docker.errors.APIError as exc:
+    except docker.errors.DockerException as exc:
         log.error("erreur API Docker au reload WAF: %s", exc)
         return False
 
@@ -86,14 +96,14 @@ def restart_container(name: str) -> bool:
         log.warning("restart refusé (hors allowlist): %s", name)
         return False
     try:
-        container = _docker.containers.get(name)
+        container = _client().containers.get(name)
         container.restart(timeout=10)
         log.info("conteneur redémarré: %s", name)
         return True
     except docker.errors.NotFound:
         log.error("conteneur introuvable: %s", name)
         return False
-    except docker.errors.APIError as exc:
+    except docker.errors.DockerException as exc:
         log.error("erreur API Docker au restart %s: %s", name, exc)
         return False
 
@@ -106,12 +116,12 @@ def top_attacker_ip(window_s: int = 120) -> str | None:
     externes malveillants, jamais les services internes. Retourne la plus active.
     """
     try:
-        waf = _docker.containers.get(config.WAF_CONTAINER)
+        waf = _client().containers.get(config.WAF_CONTAINER)
         raw = waf.logs(since=int(time.time()) - window_s).decode("utf-8", errors="replace")
     except docker.errors.NotFound:
         log.error("conteneur WAF introuvable pour la résolution d'IP")
         return None
-    except docker.errors.APIError as exc:
+    except docker.errors.DockerException as exc:
         log.error("lecture des logs WAF impossible: %s", exc)
         return None
 

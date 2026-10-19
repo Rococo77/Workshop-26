@@ -10,6 +10,7 @@ Périmètre strict : uniquement le SI fictif de l'équipe (sujet §3.4 / §9).
 Usage :
     python3 flood.py --target http://192.168.137.1:8080 --duration 40 --workers 50
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,7 +47,9 @@ def main() -> None:
 
     print(f"[flood] cible={args.target} durée={args.duration}s workers={args.workers}")
     stop = threading.Event()
-    threads = [threading.Thread(target=_worker, args=(args.target, stop)) for _ in range(args.workers)]
+    threads = [
+        threading.Thread(target=_worker, args=(args.target, stop)) for _ in range(args.workers)
+    ]
     for t in threads:
         t.start()
 

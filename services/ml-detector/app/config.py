@@ -1,4 +1,5 @@
 """Configuration du détecteur d'anomalies."""
+
 from __future__ import annotations
 
 import os
@@ -17,9 +18,9 @@ COOLDOWN_SECONDS: float = float(os.getenv("COOLDOWN_SECONDS", "45"))
 
 # Ordre des features (doit rester cohérent entre entraînement et inférence).
 FEATURE_NAMES: tuple[str, ...] = (
-    "req_rate",       # requêtes/s sur l'API métier
-    "err_ratio",      # part de réponses 5xx
-    "p95_latency",    # latence p95 (s)
-    "auth_fail_rate", # échecs d'auth/s
-    "waf_block_rate", # requêtes rejetées par le WAF/s (403+429)
+    "req_rate",  # requêtes/s sur l'API métier
+    "err_ratio",  # part de réponses 5xx
+    "p95_latency",  # latence p95 (s)
+    "auth_fail_rate",  # échecs d'auth/s
+    "waf_block_rate",  # requêtes rejetées par le WAF/s (403+429)
 )

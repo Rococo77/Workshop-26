@@ -2,6 +2,7 @@
 qui en fait trop. Une IP invalide ne doit jamais être écrite dans la blocklist,
 et seul un conteneur de l'allowlist peut être redémarré.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -30,3 +31,15 @@ def test_restart_refuse_hors_allowlist():
 def test_allowlist_contient_les_services_metier():
     assert "ra-payment-api" in config.RESTARTABLE_CONTAINERS
     assert "ra-postgres" not in config.RESTARTABLE_CONTAINERS
+
+
+def test_socket_docker_indisponible_echec_propre(tmp_path, monkeypatch):
+    """Régression : sans démon Docker, le moteur ne doit ni crasher à l'import
+    ni lever d'exception pendant une remédiation — l'action échoue proprement."""
+    monkeypatch.setenv("DOCKER_HOST", f"unix://{tmp_path}/absent.sock")
+    monkeypatch.setattr(actions, "_docker", None)  # force la recréation du client
+    monkeypatch.setattr(actions.config, "WAF_DYNAMIC_DIR", str(tmp_path))
+
+    assert actions.restart_container("ra-payment-api") is False
+    assert actions.block_ip("203.0.113.7") is False  # blocklist écrite, reload KO
+    assert actions.top_attacker_ip() is None

@@ -3,6 +3,7 @@
 Expose volontairement `auth_login_failures_total` : signal clé pour la
 détection d'anomalie (brute force / credential stuffing).
 """
+
 from __future__ import annotations
 
 import logging
@@ -51,7 +52,9 @@ def login(req: LoginRequest) -> TokenResponse:
         user = db.fetch_user(req.username)
     except Exception as exc:  # indisponibilité base -> 503 explicite
         log.error("auth db unavailable: %s", exc)
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "auth backend unavailable")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "auth backend unavailable"
+        ) from exc
 
     if user is None or not verify_password(req.password, user["password_hash"]):
         LOGIN_ATTEMPTS.labels(result="failure").inc()

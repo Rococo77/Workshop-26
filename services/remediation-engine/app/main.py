@@ -3,11 +3,12 @@
 Reçoit les incidents du détecteur ML, exécute le playbook adapté, vérifie la
 reprise par transaction canari, expose l'état pour le dashboard + Prometheus.
 """
+
 from __future__ import annotations
 
 import logging
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Header, HTTPException, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
@@ -50,6 +51,7 @@ def health() -> dict[str, str]:
 @app.get("/metrics")
 def metrics() -> Response:
     from . import actions
+
     ACTIVE_BLOCKS.set(len(actions.blocked_ips()))
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
@@ -57,6 +59,7 @@ def metrics() -> Response:
 @app.get("/status")
 def get_status() -> dict:
     from . import actions
+
     return {
         "blocked_ips": actions.blocked_ips(),
         "events": list(_events),
@@ -69,8 +72,13 @@ def receive_incident(
     incident: Incident, x_remediation_token: str | None = Header(default=None)
 ) -> dict:
     _auth(x_remediation_token)
-    log.info("incident reçu: %s (service=%s, ip=%s, score=%s)",
-             incident.type, incident.service, incident.source_ip, incident.anomaly_score)
+    log.info(
+        "incident reçu: %s (service=%s, ip=%s, score=%s)",
+        incident.type,
+        incident.service,
+        incident.source_ip,
+        incident.anomaly_score,
+    )
 
     result = playbooks.dispatch(incident.type, incident.service, incident.source_ip)
 
@@ -80,7 +88,7 @@ def receive_incident(
         LAST_RECOVERY.set_to_current_time()
 
     event = {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "type": result.incident_type,
         "service": incident.service,
         "source_ip": incident.source_ip,

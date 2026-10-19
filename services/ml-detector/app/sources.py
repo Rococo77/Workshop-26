@@ -6,6 +6,7 @@ pour la corrélation SIEM et le dashboard, mais n'est pas sur le chemin critique
 L'IP attaquante est résolue côté moteur de remédiation (lecture directe des logs
 du conteneur WAF), au plus près de l'action de blocage.
 """
+
 from __future__ import annotations
 
 import logging
@@ -20,8 +21,7 @@ log = logging.getLogger("detector.sources")
 def _prom_scalar(client: httpx.Client, query: str) -> float:
     """Exécute une requête instantanée Prometheus et renvoie une valeur scalaire."""
     try:
-        r = client.get(f"{config.PROMETHEUS_URL}/api/v1/query",
-                        params={"query": query}, timeout=5)
+        r = client.get(f"{config.PROMETHEUS_URL}/api/v1/query", params={"query": query}, timeout=5)
         r.raise_for_status()
         result = r.json()["data"]["result"]
         if not result:
@@ -41,20 +41,22 @@ def collect_features(client: httpx.Client) -> dict[str, float]:
     Repli sur les métriques de l'API métier si l'exporter n'est pas encore prêt.
     """
     waf_total = _prom_scalar(client, "sum(rate(nginx_http_response_count_total[1m]))")
-    api_rate = _prom_scalar(
-        client, 'sum(rate(http_requests_total{service="payment-api"}[1m]))')
+    api_rate = _prom_scalar(client, 'sum(rate(http_requests_total{service="payment-api"}[1m]))')
     req_rate = max(waf_total, api_rate)  # charge entrante réelle
 
     err_rate = _prom_scalar(
-        client, 'sum(rate(http_requests_total{service="payment-api",status=~"5.."}[1m]))')
+        client, 'sum(rate(http_requests_total{service="payment-api",status=~"5.."}[1m]))'
+    )
     err_ratio = (err_rate / api_rate) if api_rate > 0 else 0.0
     p95 = _prom_scalar(
         client,
-        'histogram_quantile(0.95, sum(rate('
-        'http_request_duration_seconds_bucket{service="payment-api"}[1m])) by (le))')
+        "histogram_quantile(0.95, sum(rate("
+        'http_request_duration_seconds_bucket{service="payment-api"}[1m])) by (le))',
+    )
     auth_fail = _prom_scalar(client, "sum(rate(auth_login_failures_total[1m]))")
     waf_block = _prom_scalar(
-        client, 'sum(rate(nginx_http_response_count_total{status=~"403|429"}[1m]))')
+        client, 'sum(rate(nginx_http_response_count_total{status=~"403|429"}[1m]))'
+    )
 
     return {
         "req_rate": req_rate if req_rate == req_rate else 0.0,
@@ -73,10 +75,8 @@ def classify_attack(client: httpx.Client) -> str:
       - sinon (volume / 429 de rate-limit dominants)       -> dos_flood
     Déterministe (Prometheus), sans dépendance à la latence d'ingestion de Loki.
     """
-    block_403 = _prom_scalar(
-        client, 'sum(rate(nginx_http_response_count_total{status="403"}[1m]))')
-    block_429 = _prom_scalar(
-        client, 'sum(rate(nginx_http_response_count_total{status="429"}[1m]))')
+    block_403 = _prom_scalar(client, 'sum(rate(nginx_http_response_count_total{status="403"}[1m]))')
+    block_429 = _prom_scalar(client, 'sum(rate(nginx_http_response_count_total{status="429"}[1m]))')
     total = block_403 + block_429
     if total > 0 and block_403 / total >= 0.4:
         return "injection_attempt"

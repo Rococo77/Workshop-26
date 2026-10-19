@@ -5,6 +5,7 @@ Les features clés de détection sont dérivées de :
   - http_request_duration_seconds       -> latence p95
   - payment_tx_total{result}            -> santé métier (échecs de transaction)
 """
+
 from __future__ import annotations
 
 import time
@@ -13,11 +14,11 @@ from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-HTTP_REQUESTS = Counter(
-    "http_requests_total", "Requêtes HTTP", ["method", "path", "status"]
-)
+HTTP_REQUESTS = Counter("http_requests_total", "Requêtes HTTP", ["method", "path", "status"])
 HTTP_LATENCY = Histogram(
-    "http_request_duration_seconds", "Latence HTTP", ["method", "path"],
+    "http_request_duration_seconds",
+    "Latence HTTP",
+    ["method", "path"],
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
 PAYMENT_TX = Counter("payment_tx_total", "Transactions métier", ["result"])

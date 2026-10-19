@@ -2,6 +2,7 @@
 logs WAF (côté moteur de remédiation) conditionne le blocage de la bonne IP.
 On teste le parsing nginx.
 """
+
 from __future__ import annotations
 
 import pytest

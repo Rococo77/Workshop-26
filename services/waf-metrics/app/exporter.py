@@ -9,6 +9,7 @@ aussi ce qu'il rejette).
 Volontairement maison (une quarantaine de lignes, prometheus_client déjà utilisé)
 plutôt qu'une image tierce : contrôle total, testable, aucune dépendance externe.
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,8 +26,9 @@ LOG_FILE = os.getenv("WAF_ACCESS_LOG", "/var/log/nginx/ra_access.log")
 PORT = int(os.getenv("EXPORTER_PORT", "4040"))
 
 # Nom de métrique aligné sur les requêtes du détecteur.
-RESPONSES = Counter("nginx_http_response_count_total", "Réponses WAF par statut",
-                    ["status", "method"])
+RESPONSES = Counter(
+    "nginx_http_response_count_total", "Réponses WAF par statut", ["status", "method"]
+)
 
 # "<ip> - <user> [date] \"METHOD path proto\" <status> ..."
 _LINE = re.compile(r'^\S+ \S+ \S+ \[[^\]]*\] "([A-Z]+) [^"]*" (\d{3})')
@@ -42,7 +44,7 @@ def _follow(path: str):
     """Suit le fichier (comme tail -F) en tolérant son absence et sa rotation."""
     while True:
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(path, encoding="utf-8", errors="replace") as f:
                 f.seek(0, os.SEEK_END)  # on ne compte que le trafic live
                 inode = os.fstat(f.fileno()).st_ino
                 log.info("suivi du journal %s", path)

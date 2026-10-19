@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { login } from "./api.js";
 import PaymentPanel from "./components/PaymentPanel.jsx";
 import SupervisionPanel from "./components/SupervisionPanel.jsx";

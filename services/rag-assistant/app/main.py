@@ -8,6 +8,7 @@ documentaire en lecture seule et répond en langage naturel.
 Dégradation maîtrisée : si Ollama est indisponible, l'API répond proprement
 (503) au lieu de planter, et l'index se (re)construit à la première requête.
 """
+
 from __future__ import annotations
 
 import logging
@@ -46,8 +47,9 @@ def _build_retriever():
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     docs_path = Path(CORPUS_DIR)
-    loader = DirectoryLoader(str(docs_path), glob="**/*.md", loader_cls=TextLoader,
-                             loader_kwargs={"encoding": "utf-8"})
+    loader = DirectoryLoader(
+        str(docs_path), glob="**/*.md", loader_cls=TextLoader, loader_kwargs={"encoding": "utf-8"}
+    )
     documents = loader.load()
     if not documents:
         raise RuntimeError(f"corpus vide dans {CORPUS_DIR}")
@@ -79,16 +81,21 @@ def ask(question: Question) -> Answer:
         context = "\n\n".join(d.page_content for d in context_docs)
         sources = sorted({Path(d.metadata.get("source", "?")).name for d in context_docs})
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "Tu es un assistant d'exploitation. Réponds en français, "
-                       "de façon concise, UNIQUEMENT à partir du contexte fourni. "
-                       "Si l'information n'y est pas, dis-le."),
-            ("human", "Contexte :\n{context}\n\nQuestion : {q}"),
-        ])
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Tu es un assistant d'exploitation. Réponds en français, "
+                    "de façon concise, UNIQUEMENT à partir du contexte fourni. "
+                    "Si l'information n'y est pas, dis-le.",
+                ),
+                ("human", "Contexte :\n{context}\n\nQuestion : {q}"),
+            ]
+        )
         llm = ChatOllama(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL, temperature=0)
         chain = prompt | llm
         resp = chain.invoke({"context": context, "q": question.q})
         return Answer(answer=resp.content, sources=sources)
     except Exception as exc:
         log.error("RAG indisponible: %s", exc)
-        raise HTTPException(503, f"assistant indisponible (Ollama requis): {exc}")
+        raise HTTPException(503, f"assistant indisponible (Ollama requis): {exc}") from exc

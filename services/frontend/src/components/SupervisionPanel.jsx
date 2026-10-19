@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { getOverview } from "../api.js";
 
 // Tableau de bord de reprise : état des services, score d'anomalie du modèle,
@@ -50,7 +50,7 @@ export default function SupervisionPanel() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="rounded-lg p-4 bg-slate-900 border border-slate-700">
-          <div className="text-xs uppercase text-slate-400">Score d'anomalie (ML)</div>
+          <div className="text-xs uppercase text-slate-400">Score d&apos;anomalie (ML)</div>
           <div className={`text-3xl font-bold ${score > 0.5 ? "text-red-400" : "text-emerald-400"}`}>
             {score.toFixed(2)}
           </div>

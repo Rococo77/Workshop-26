@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getAccounts, createTransaction } from "../api.js";
 
 // Parcours métier : visualiser ses comptes et initier une transaction.
@@ -10,16 +10,19 @@ export default function PaymentPanel({ token }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
-  const refresh = async () => {
+  // Dépend du jeton : une reconnexion avec un autre utilisateur recharge ses comptes.
+  const refresh = useCallback(async () => {
     try {
       setAccounts(await getAccounts(token));
       setError(null);
     } catch (e) {
       setError(e.message);
     }
-  };
+  }, [token]);
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
 
   const submit = async (e) => {
     e.preventDefault();

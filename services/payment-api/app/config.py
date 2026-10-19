@@ -1,4 +1,5 @@
 """Configuration typée de l'API métier."""
+
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
