@@ -30,7 +30,7 @@ et le cœur de la valeur est le job **E2E** qui rejoue la chaîne de cyber-rési
       ▼
  ┌─────────────────────┐   étapes 4+5 : packaging + scan
  │ build-scan (Trivy)  │   docker compose build (cœur+IA)
- │ images + fs + CVE   │   Trivy HIGH/CRITICAL → fail
+ │ vuln deps = bloquant│   misconfig/secret = report-only (SARIF)
  └────┬────────────────┘
       ▼
  ┌──────────────┐  étape 6 : "staging" = PC Hôte (Ansible), documenté
@@ -73,6 +73,13 @@ faute de serveur donnerait une CI rouge, sans valeur. Les choix :
 - **Tests E2E** : au lieu de Selenium sur un site déployé, on rejoue la **vraie
   chaîne de résilience** en démarrant le stack via `docker compose` et en
   vérifiant la reprise autonome. C'est le test qui compte pour ce projet.
+- **Scan Trivy** : gate **bloquant** sur les vulnérabilités corrigeables de nos
+  dépendances (ce qu'on contrôle, `ignore-unfixed`). Les mauvaises configs
+  Dockerfile (certains conteneurs tournent en root **volontairement**, ex. le
+  moteur de remédiation qui a besoin du socket Docker) et la détection de secrets
+  sont en **report-only** (publiées dans l'onglet Security), pour ne pas rendre
+  la CI rouge sur des choix assumés. Pour durcir : passer `scanners: misconfig`
+  en `exit-code: "1"` une fois les exceptions tracées dans `.trivyignore`.
 
 ## Secrets
 

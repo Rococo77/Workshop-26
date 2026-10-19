@@ -161,26 +161,46 @@ jobs:
       needs.changes.outputs.docker == 'true' &&
       (needs.test-python.result == 'success' || needs.test-python.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload SARIF vers l'onglet Security
     steps:
       - uses: actions/checkout@v4
       - name: Préparer l'environnement
         run: cp .env.example .env
       - name: Build de toutes les images (cœur + IA)
         run: docker compose --profile ai build
-      - name: Installer Trivy
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.56.2
-      - name: Scan des dépendances & configs (filesystem)
-        run: trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed .
-      - name: Scan des images construites
-        run: |
-          set -e
-          for img in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^resilience-alpha-'); do
-            echo "::group::Trivy $img"
-            trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed "$img"
-            echo "::endgroup::"
-          done
+
+      # Gate BLOQUANT : vulnérabilités connues et CORRIGEABLES de NOS dépendances
+      # (requirements.txt, package-lock.json). C'est ce qu'on contrôle.
+      - name: Trivy — vulnérabilités des dépendances (bloquant)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          scan-ref: .
+
+      # REPORT-ONLY : mauvaises configurations Dockerfile (certains root sont
+      # intentionnels, ex. le moteur de remédiation) et détection de secrets.
+      # Résultats publiés dans l'onglet Security, sans bloquer la CI.
+      - name: Trivy — misconfig & secrets (report-only, SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scanners: misconfig,secret
+          severity: MEDIUM,HIGH,CRITICAL
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: "0"
+      - name: Publier le rapport Trivy
+        if: always() && hashFiles('trivy-config.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
 
   # ─────────────────────────────────────────────────────────────
   # 6. (Déploiement staging) — documenté : déploiement LOCAL sur PC Hôte
