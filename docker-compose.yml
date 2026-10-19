@@ -60,6 +60,13 @@ services:
     volumes:
       - waf-dynamic:/etc/nginx/dynamic
       - waf-logs:/var/log/ra
+    # Le healthcheck de l'image CRS sonde https://localhost:8443/healthz, absent
+    # de notre config (seul :8080 est servi) -> toujours "unhealthy" sans ceci.
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-o", "/dev/null", "http://localhost:8080/waf-health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
     networks: [edge, app]
     logging: *default-logging
     labels:
