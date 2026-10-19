@@ -211,7 +211,8 @@ services:
     environment:
       WAF_ACCESS_LOG: "/var/log/ra/ra_access.log"
     volumes:
-      - waf-logs:/var/log/ra:ro
+      # rw : l'exporter tronque le journal au-delà de WAF_LOG_MAX_BYTES.
+      - waf-logs:/var/log/ra
     networks: [obs]
     logging: *default-logging
     labels:

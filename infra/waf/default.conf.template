@@ -19,8 +19,11 @@ server {
     # ModSecurity + OWASP CRS sont activés GLOBALEMENT par l'image CRS
     # (conf.d/modsecurity.conf -> setup.conf), donc actifs ici sans redéclaration.
 
-    # Blocklist dynamique : le moteur de remédiation écrit ici des `deny <ip>;`
-    # puis déclenche `nginx -s reload`. Le glob tolère l'absence de fichier.
+    # Blocklist dynamique : le moteur de remédiation écrit ici des
+    # `if ($remote_addr = "<ip>") { return 444; }` puis `nginx -s reload`.
+    # 444 (et non le 403 de `deny`) : évaluée avant limit_req/CRS, et distincte
+    # des 403 du CRS pour ne pas fausser la qualification injection vs DoS.
+    # Le glob tolère l'absence de fichier.
     include /etc/nginx/dynamic/*.conf;
 
     # En-têtes de durcissement.

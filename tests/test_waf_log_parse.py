@@ -25,3 +25,20 @@ def test_parse_ligne_access_nginx():
 
 def test_ignore_ligne_non_access():
     assert actions._ACCESS_RE.match("ModSecurity: warning. Matched ...") is None
+
+
+def test_exporter_borne_le_label_method():
+    """Méthode inventée par le client -> "OTHER" : cardinalité bornée."""
+    pytest.importorskip("prometheus_client")
+    exporter = load_service_module("wafm", "services/waf-metrics", "exporter")
+
+    def count(method):
+        return exporter.RESPONSES.labels(status="200", method=method)._value.get()
+
+    before = count("OTHER")
+    exporter._parse('1.2.3.4 - - [d] "FOOBAR / HTTP/1.1" 200 1')
+    exporter._parse('1.2.3.4 - - [d] "GET / HTTP/1.1" 200 1')
+    assert count("OTHER") == before + 1
+    assert count("GET") == 1
+    methods = {s.labels["method"] for m in exporter.RESPONSES.collect() for s in m.samples}
+    assert "FOOBAR" not in methods

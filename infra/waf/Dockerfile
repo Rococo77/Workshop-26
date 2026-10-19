@@ -19,7 +19,9 @@ RUN mkdir -p /etc/nginx/dynamic
 # puis on revient à l'utilisateur nginx de l'image (moindre privilège préservé).
 # Le volume nommé hérite de ces permissions (1777) à sa première initialisation.
 USER root
-RUN mkdir -p /var/log/ra && chmod 1777 /var/log/ra
+# Journal pré-créé en 0666 : l'exporter (autre uid) doit pouvoir le tronquer.
+RUN mkdir -p /var/log/ra && chmod 1777 /var/log/ra \
+    && touch /var/log/ra/ra_access.log && chmod 0666 /var/log/ra/ra_access.log
 USER nginx
 
 EXPOSE 8080

@@ -4,8 +4,9 @@ FROM node:22-slim
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+# Lockfile + npm ci : mêmes versions que celles testées et scannées par Trivy.
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 
