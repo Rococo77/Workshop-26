@@ -171,32 +171,26 @@ jobs:
       - name: Build de toutes les images (cœur + IA)
         run: docker compose --profile ai build
 
+      # Install direct du binaire Trivy, version épinglée (pas de dépendance à
+      # un tag d'action à deviner ; reproductible).
+      - name: Installer Trivy v0.76.0
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.76.0
+          trivy --version
+
       # Gate BLOQUANT : vulnérabilités connues et CORRIGEABLES de NOS dépendances
       # (requirements.txt, package-lock.json). C'est ce qu'on contrôle.
       - name: Trivy — vulnérabilités des dépendances (bloquant)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          version: v0.76.0 # binaire Trivy épinglé (reproductibilité)
-          scan-type: fs
-          scanners: vuln
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
-          scan-ref: .
+        run: trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 .
 
       # REPORT-ONLY : mauvaises configurations Dockerfile (certains root sont
       # intentionnels, ex. le moteur de remédiation) et détection de secrets.
       # Résultats publiés dans l'onglet Security, sans bloquer la CI.
       - name: Trivy — misconfig & secrets (report-only, SARIF)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          version: v0.76.0
-          scan-type: fs
-          scanners: misconfig,secret
-          severity: MEDIUM,HIGH,CRITICAL
-          format: sarif
-          output: trivy-config.sarif
-          exit-code: "0"
+        run: |
+          trivy fs --scanners misconfig,secret --severity MEDIUM,HIGH,CRITICAL \
+            --format sarif --output trivy-config.sarif --exit-code 0 .
       - name: Publier le rapport Trivy
         if: always() && hashFiles('trivy-config.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
