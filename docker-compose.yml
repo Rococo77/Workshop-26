@@ -151,7 +151,10 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
+      # Grâce à l'initialisation (initdb + scripts seed) : sous charge (build +
+      # démarrage simultané), les premiers checks ne doivent pas épuiser les retries.
+      start_period: 40s
     logging: *default-logging
     labels:
       ra.role: "database"
