@@ -1,4 +1,5 @@
 """Configuration typée du service d'authentification."""
+
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

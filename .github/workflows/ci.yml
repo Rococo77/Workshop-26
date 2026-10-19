@@ -1,0 +1,301 @@
+name: CI/CD — Resilience-Alpha
+
+# Chaîne canonique (modifier → statique → build → dynamique → packaging → scan
+# → staging → E2E → validation → prod → validation). Adaptée au contexte :
+# démonstrateur local (pas de cloud), donc les étapes de déploiement cloud sont
+# des jobs DOCUMENTÉS, et le vrai test d'intégration rejoue la chaîne de
+# résilience (attaque → détection → remédiation → canari) à chaque push.
+
+on:
+  push:
+    branches: [main, develop, "resilience-alpha", "release/**", "hotfix/**"]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # 0. Détection des changements (monorepo : ne lance que l'utile)
+  # ─────────────────────────────────────────────────────────────
+  changes:
+    name: Détection des changements
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'services/**/*.py'
+              - 'ml/**/*.py'
+              - 'attack/**/*.py'
+              - 'tests/**'
+              - 'pyproject.toml'
+            frontend:
+              - 'services/frontend/**'
+            docker:
+              - 'services/**'
+              - 'infra/**'
+              - 'docker-compose.yml'
+
+  # ─────────────────────────────────────────────────────────────
+  # 1. Tests statiques — lint, format, sécurité (+ SonarQube optionnel)
+  # ─────────────────────────────────────────────────────────────
+  static-python:
+    name: Statique Python (ruff, bandit)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install ruff==0.6.9 bandit==1.7.10
+      - name: Ruff (lint)
+        run: ruff check . --output-format=github
+      - name: Ruff (format)
+        run: ruff format --check .
+      - name: Bandit (sécurité)
+        # -ll : seuls les problèmes de sévérité/confiance élevée bloquent.
+        run: bandit -r services ml -ll -x '**/tests/**'
+      - name: SonarQube (si configuré)
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v3
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  static-frontend:
+    name: Statique Frontend (eslint)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. Build — compilation / bundling (front) ; les images -> job packaging
+  # ─────────────────────────────────────────────────────────────
+  build-frontend:
+    name: Build Frontend
+    needs: [changes, static-frontend]
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: services/frontend/dist
+          retention-days: 3
+
+  # ─────────────────────────────────────────────────────────────
+  # 3. Tests dynamiques — pytest + couverture
+  # ─────────────────────────────────────────────────────────────
+  test-python:
+    name: Tests dynamiques (pytest)
+    needs: [changes, static-python]
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Dépendances de test
+        run: pip install -r tests/requirements-dev.txt pytest-cov docker==7.1.0 httpx==0.27.2
+      - name: pytest + couverture
+        run: pytest --cov --cov-report=xml --cov-report=term -ra
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 3
+
+  # ─────────────────────────────────────────────────────────────
+  # 4+5. Packaging (build images) & Scan de vulnérabilités (Trivy)
+  # ─────────────────────────────────────────────────────────────
+  build-scan:
+    name: Build images & Scan (Trivy)
+    needs: [changes, test-python]
+    # Toujours si du Docker a changé ; tolère que test-python soit skip.
+    if: |
+      always() &&
+      needs.changes.outputs.docker == 'true' &&
+      (needs.test-python.result == 'success' || needs.test-python.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload SARIF vers l'onglet Security
+    steps:
+      - uses: actions/checkout@v4
+      - name: Préparer l'environnement
+        run: cp .env.example .env
+      - name: Build de toutes les images (cœur + IA)
+        run: docker compose --profile ai build
+
+      # Install direct du binaire Trivy, version épinglée (pas de dépendance à
+      # un tag d'action à deviner ; reproductible).
+      - name: Installer Trivy v0.76.0
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.76.0
+          trivy --version
+
+      # Gate BLOQUANT : vulnérabilités connues et CORRIGEABLES de NOS dépendances
+      # (requirements.txt, package-lock.json). C'est ce qu'on contrôle.
+      - name: Trivy — vulnérabilités des dépendances (bloquant)
+        run: trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 .
+
+      # REPORT-ONLY : mauvaises configurations Dockerfile (certains root sont
+      # intentionnels, ex. le moteur de remédiation) et détection de secrets.
+      # Résultats publiés dans l'onglet Security, sans bloquer la CI.
+      - name: Trivy — misconfig & secrets (report-only, SARIF)
+        run: |
+          trivy fs --scanners misconfig,secret --severity MEDIUM,HIGH,CRITICAL \
+            --format sarif --output trivy-config.sarif --exit-code 0 .
+      # Publication dans l'onglet Security (code scanning). Non bloquant : si le
+      # code scanning n'est pas activé (dépôt privé sans GHAS, PR de fork...),
+      # on n'échoue pas le job — le rapport reste dispo en artefact ci-dessous.
+      - name: Publier le rapport Trivy (onglet Security)
+        if: always() && hashFiles('trivy-config.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+      - name: Rapport Trivy en artefact (repli)
+        if: always() && hashFiles('trivy-config.sarif') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-config-sarif
+          path: trivy-config.sarif
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────
+  # 6. (Déploiement staging) — documenté : déploiement LOCAL sur PC Hôte
+  # ─────────────────────────────────────────────────────────────
+  deploy-staging:
+    name: Déploiement staging (local, documenté)
+    needs: build-scan
+    if: always() && needs.build-scan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Démonstrateur : pas d'environnement cloud (sujet §4)."
+          echo "Le 'staging' est le PC Hôte, déployé par Ansible :"
+          echo "  cd infra/ansible && ansible-playbook deploy.yml"
+          echo "Étape canonique conservée et documentée (docs/CICD.md)."
+
+  # ─────────────────────────────────────────────────────────────
+  # 7. Tests end-to-end — LA chaîne de résilience, rejouée pour de vrai
+  # ─────────────────────────────────────────────────────────────
+  e2e:
+    name: E2E — reprise autonome (attaque → détection → remédiation → canari)
+    needs: deploy-staging
+    if: always() && needs.deploy-staging.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rendre le script exécutable
+        run: chmod +x scripts/ci-e2e.sh
+      - name: Jouer la chaîne de résilience
+        run: scripts/ci-e2e.sh
+
+  # ─────────────────────────────────────────────────────────────
+  # 8. Validation manuelle — gate humain avant "prod"
+  # ─────────────────────────────────────────────────────────────
+  manual-approval:
+    name: Validation manuelle
+    needs: e2e
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production-approval # configurer "Required reviewers" dans Settings → Environments
+    steps:
+      - run: echo "Approuvé pour la prod par ${{ github.actor }}"
+
+  # ─────────────────────────────────────────────────────────────
+  # 9. Packaging final — publication des images sur GHCR (sur main)
+  # ─────────────────────────────────────────────────────────────
+  publish:
+    name: Publication des images (GHCR)
+    needs: manual-approval
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Connexion à GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Préparer l'environnement
+        run: cp .env.example .env
+      - name: Build & push (tag = SHA court + latest)
+        run: |
+          set -e
+          SHA="${GITHUB_SHA::8}"
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          docker compose --profile ai build
+          for img in $(docker images --format '{{.Repository}}' | grep '^resilience-alpha-' | sort -u); do
+            svc="${img#resilience-alpha-}"
+            dst="ghcr.io/${OWNER}/resilience-alpha-${svc}"
+            docker tag "${img}:latest" "${dst}:${SHA}"
+            docker tag "${img}:latest" "${dst}:latest"
+            docker push "${dst}:${SHA}"
+            docker push "${dst}:latest"
+          done
+
+  # ─────────────────────────────────────────────────────────────
+  # 10+11. Déploiement prod & validation — documentés (démo locale)
+  # ─────────────────────────────────────────────────────────────
+  deploy-prod:
+    name: Déploiement production (local, documenté)
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+    steps:
+      - run: |
+          echo "Déploiement prod = PC Hôte, mêmes playbooks Ansible que staging :"
+          echo "  cd infra/ansible && ansible-playbook deploy.yml -e with_ai=true"
+          echo "Validation post-déploiement : make verify + Clip Chrono de la démo."

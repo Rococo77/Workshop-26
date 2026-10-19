@@ -8,24 +8,28 @@
 - Docker Compose v2, 16 Go RAM (32 Go recommandé si profil IA sur le même poste).
 - Python 3 (pour les scripts d'attaque et d'entraînement ML).
 - Ports publiés : `8080` (WAF = front + API), `3000` (Grafana).
+- **WSL2 (Ubuntu)** nécessaire uniquement pour **Ansible** (option C) et les
+  scripts `.sh`. Les options A/B (`docker compose`) tournent dans PowerShell.
 
 ## 2. Déploiement
 
-### Option A — Make (rapide)
+### Option A — Docker Compose (voie de référence, PowerShell ou bash)
+```bash
+copy .env.example .env                       # PowerShell : copy ; bash : cp
+docker compose up -d --build                 # cœur (sans IA)
+docker compose --profile ai up -d --build    # cœur + assistant IA (Ollama + RAG)
+docker compose ps                            # état des conteneurs
+```
+
+### Option B — Make (raccourcis, WSL/Linux/macOS)
 ```bash
 make up          # cœur (sans IA)
-make up-ai       # cœur + assistant IA (Ollama + RAG)
+make up-ai       # cœur + assistant IA
 make ps          # état des conteneurs
 ```
+Make n'est pas installé par défaut sous Windows : utiliser l'option A dans ce cas.
 
-### Option B — Docker Compose
-```bash
-cp .env.example .env         # ou : scripts/secrets.sh decrypt (SOPS/age)
-docker compose up -d --build
-docker compose --profile ai up -d --build   # avec IA
-```
-
-### Option C — Ansible (reproductible)
+### Option C — Ansible (reproductible, nécessite WSL sous Windows)
 ```bash
 cd infra/ansible
 ansible-playbook deploy.yml                  # cœur
@@ -46,7 +50,9 @@ scripts/secrets.sh decrypt   # secrets.enc.env -> .env (local)
 
 ```bash
 curl -s http://127.0.0.1:8080/api/ready        # 200 = base joignable
-make verify                                     # transaction canari
+# Transaction canari (preuve que le chemin métier complet fonctionne) :
+docker exec ra-payment-api python -c "import urllib.request;print(urllib.request.urlopen(urllib.request.Request('http://localhost:8000/internal/canary',method='POST')).read().decode())"
+# Raccourci équivalent sous WSL/Linux/macOS : make verify
 ```
 Interfaces :
 - Front + dashboard : http://127.0.0.1:8080
@@ -88,12 +94,13 @@ docker kill ra-payment-api     # le détecteur voit up==0 -> restart auto -> can
 | `api/ready` en 503 | Postgres pas encore prêt | attendre le healthcheck, `docker compose logs postgres` |
 | Pas de détection | Loki/Prometheus pas scrapés | `docker compose logs ml-detector`, vérifier `/metrics` |
 | WAF ne bloque pas | reload échoué | `docker logs ra-remediation`, vérifier le volume `waf-dynamic` |
-| RAG en 503 | Ollama absent / modèle non pull | `make up-ai`, `docker exec ra-ollama ollama pull llama3.2:3b` |
+| RAG en 503 | Ollama absent / modèle non pull | `docker compose --profile ai up -d`, `docker exec ra-ollama ollama pull llama3.2:3b` |
 | Front inaccessible | Vite pas démarré | `docker compose logs frontend` |
 
 ## 8. Arrêt / remise à zéro
 
 ```bash
-make down     # arrêt
-make reset    # arrêt + suppression des volumes (état propre)
+docker compose --profile ai down      # arrêt
+docker compose --profile ai down -v   # arrêt + suppression des volumes (état propre)
+# Raccourcis WSL/Linux/macOS : make down / make reset
 ```

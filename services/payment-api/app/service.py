@@ -4,6 +4,7 @@ Séparé du routage (le contrôleur ne porte pas de logique métier).
 Verrouillage pessimiste ordonné par id pour éviter les interblocages et
 garantir la cohérence du solde sous concurrence.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -42,23 +43,31 @@ def transfer(
     first, second = sorted((src_account, dst_account))
 
     with db.get_conn() as conn:
-        conn.execute("SELECT id FROM account WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
-                     (first, second))
+        conn.execute(
+            "SELECT id FROM account WHERE id IN (%s, %s) ORDER BY id FOR UPDATE", (first, second)
+        )
 
         src = _get_account_for_user(conn, src_account, username)
-        dst = conn.execute("SELECT id, balance FROM account WHERE id = %s", (dst_account,)).fetchone()
+        dst = conn.execute(
+            "SELECT id, balance FROM account WHERE id = %s", (dst_account,)
+        ).fetchone()
         if dst is None:
             raise BusinessError("destination account not found")
 
         if Decimal(src["balance"]) < amount:
             raise BusinessError("insufficient funds")
 
-        conn.execute("UPDATE account SET balance = balance - %s WHERE id = %s", (amount, src_account))
-        conn.execute("UPDATE account SET balance = balance + %s WHERE id = %s", (amount, dst_account))
+        conn.execute(
+            "UPDATE account SET balance = balance - %s WHERE id = %s", (amount, src_account)
+        )
+        conn.execute(
+            "UPDATE account SET balance = balance + %s WHERE id = %s", (amount, dst_account)
+        )
 
         reference = f"TX-{uuid.uuid4().hex[:12]}"
         tx = conn.execute(
-            "INSERT INTO payment_tx (src_account, dst_account, amount, status, reference, is_canary) "
+            "INSERT INTO payment_tx "
+            "(src_account, dst_account, amount, status, reference, is_canary) "
             "VALUES (%s, %s, %s, 'settled', %s, %s) "
             "RETURNING id, reference, status, amount, created_at",
             (src_account, dst_account, amount, reference, is_canary),

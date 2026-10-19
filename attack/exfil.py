@@ -13,6 +13,7 @@ service : ici la réponse défensive est le CONFINEMENT, pas la restauration.
 Usage :
     python3 exfil.py --target http://192.168.137.1:8080
 """
+
 from __future__ import annotations
 
 import argparse

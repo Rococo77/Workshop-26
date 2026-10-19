@@ -1,0 +1,4 @@
+# Exceptions Trivy — à documenter au cas par cas (CVE, raison, échéance).
+# Vide par défaut : aucune vulnérabilité HIGH/CRITICAL n'est ignorée.
+# Exemple :
+#   CVE-2024-XXXXX  # faux positif, composant non appelé ; revue le 2026-12-01

@@ -12,6 +12,7 @@ paramétrées côté API + le CRS côté WAF neutralisent la charge.
 Usage :
     python3 sqli.py --target http://192.168.137.1:8080 --rounds 60
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,7 +27,7 @@ PAYLOADS = [
     "'; DROP TABLE app_user;--",
     "' UNION SELECT username, password_hash FROM app_user--",
     "' OR 1=1 LIMIT 1;--",
-    "\" OR \"\"=\"",
+    '" OR ""="',
     "'; SELECT pg_sleep(5);--",
 ]
 
@@ -34,8 +35,10 @@ PAYLOADS = [
 def _attempt(target: str, payload: str) -> str:
     data = json.dumps({"username": payload, "password": payload}).encode()
     req = urllib.request.Request(
-        f"{target}/auth/login", data=data,
-        headers={"Content-Type": "application/json"}, method="POST",
+        f"{target}/auth/login",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=4) as resp:

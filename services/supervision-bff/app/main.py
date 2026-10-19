@@ -4,6 +4,7 @@ N'exécute aucune action privilégiée : il interroge en GET l'état du détecte
 du moteur de remédiation et de Prometheus, puis renvoie une vue consolidée.
 Exposé via le WAF (observation jury), sans pouvoir déclencher de remédiation.
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,8 +34,7 @@ def _get_json(client: httpx.Client, url: str, default):
 
 
 def _services_up(client: httpx.Client) -> dict[str, bool]:
-    data = _get_json(client, f"{PROMETHEUS_URL}/api/v1/query?query=up",
-                     {"data": {"result": []}})
+    data = _get_json(client, f"{PROMETHEUS_URL}/api/v1/query?query=up", {"data": {"result": []}})
     out: dict[str, bool] = {}
     for item in data.get("data", {}).get("result", []):
         svc = item["metric"].get("service") or item["metric"].get("job", "?")
@@ -50,11 +50,12 @@ def health() -> dict[str, str]:
 @app.get("/overview")
 def overview() -> dict:
     """Vue consolidée : services, détection, remédiation."""
-    with httpx.Client() as client:
+    with httpx.Client(timeout=5) as client:
         services = _services_up(client)
         detector = _get_json(client, f"{DETECTOR_URL}/state", {})
-        remediation = _get_json(client, f"{REMEDIATION_URL}/status",
-                                {"events": [], "blocked_ips": []})
+        remediation = _get_json(
+            client, f"{REMEDIATION_URL}/status", {"events": [], "blocked_ips": []}
+        )
     return {
         "services": services,
         "detector": detector,

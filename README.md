@@ -9,20 +9,40 @@ canari). Aucune donnée bancaire réelle.
 
 ---
 
-## Démarrage rapide
+## Prérequis (PC Hôte)
+
+- **Windows 10/11 + Docker Desktop (WSL2)** — ou Linux + Docker Engine.
+- **Docker Compose v2** (inclus dans Docker Desktop).
+- **Python 3** pour les scripts d'attaque et l'entraînement ML (bibliothèque
+  standard uniquement côté attaque).
+- **WSL2 (Ubuntu)** requis uniquement pour **Ansible** et les scripts `.sh`
+  (`scripts/secrets.sh`, `scripts/demo.sh`). La voie `docker compose` ci-dessous
+  fonctionne telle quelle dans **PowerShell**, sans WSL.
+
+## Démarrage rapide (`docker compose` — PowerShell ou bash)
 
 ```bash
-cp .env.example .env            # ou scripts/secrets.sh decrypt (SOPS/age)
-make up                         # démarre le cœur de la plateforme
-make verify                     # vérifie l'état utilisable (canari)
-# Démo de reprise autonome (depuis le PC Attaquant) :
-make attack-flood TARGET=http://192.168.137.1:8080
+copy .env.example .env          # PowerShell : copy ; bash : cp
+docker compose up -d --build    # démarre le cœur de la plateforme
+docker compose ps               # état des conteneurs
+
+# Vérifier l'état utilisable (transaction canari)
+curl http://127.0.0.1:8080/api/ready
+
+# Démo de reprise autonome, depuis le PC Attaquant :
+python attack/flood.py --target http://192.168.137.1:8080 --duration 40 --workers 50
 ```
 
 - Front + dashboard : http://127.0.0.1:8080
 - Grafana : http://127.0.0.1:3000
 
-Assistant IA (optionnel, RAM) : `make up-ai`.
+Assistant IA (optionnel, RAM) : `docker compose --profile ai up -d --build`.
+
+> **Raccourcis `make` (optionnels, sous WSL/Linux/macOS).** Un `Makefile`
+> enveloppe ces commandes pour plus de concision : `make up`, `make verify`,
+> `make up-ai`, `make attack-flood TARGET=...`, `make test`, `make train`
+> (`make help` pour la liste). Make n'est pas installé par défaut sous Windows ;
+> les commandes `docker compose` ci-dessus sont la voie de référence.
 
 ## Architecture (5 domaines, 1 boucle)
 
@@ -57,7 +77,8 @@ docs/                architecture, EBIOS RM, PCA/PRA, NIS2/DORA, runbook
 tests/               tests (détection, garde-fous remédiation, parsing SIEM)
 scripts/             secrets (SOPS/age), orchestration de démo
 docker-compose.yml   orchestration (réseaux segmentés)
-Makefile             commandes d'exploitation
+.github/workflows/   pipeline CI/CD (lint, tests, scan, E2E de résilience)
+Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
 ```
 
 ## Principes de conception
@@ -82,8 +103,8 @@ Makefile             commandes d'exploitation
 
 ```bash
 pip install -r tests/requirements-dev.txt
-make test          # détection, garde-fous de remédiation, parsing SIEM
-make train         # (ré)entraîne et évalue le modèle
+python -m pytest -q      # détection, garde-fous de remédiation, parsing SIEM
+python ml/train.py       # (ré)entraîne et évalue le modèle
 ```
 
 ## Livrables (packaging)

@@ -11,6 +11,7 @@ Sortie :
 
 Usage : python3 ml/train.py
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,34 +24,42 @@ RNG = np.random.default_rng(42)
 FEATURES = ("req_rate", "err_ratio", "p95_latency", "auth_fail_rate", "waf_block_rate")
 
 
-def nominal(n: int = 3000) -> np.ndarray:
-    """Trafic ordinaire : charge légère, peu d'erreurs, pas de blocage WAF."""
-    return np.column_stack([
-        RNG.normal(5.0, 1.5, n).clip(0.2, None),      # req/s
-        np.abs(RNG.normal(0.0, 0.01, n)).clip(0, 1),  # ratio 5xx
-        RNG.normal(0.06, 0.02, n).clip(0.005, None),  # p95 (s)
-        np.abs(RNG.normal(0.05, 0.08, n)).clip(0, None),
-        np.abs(RNG.normal(0.0, 0.05, n)).clip(0, None),
-    ])
+def nominal(n: int = 4000) -> np.ndarray:
+    """Trafic ordinaire, du repos (idle) à la charge normale : plage large de
+    req/s, peu d'erreurs, faible latence, pas de blocage WAF."""
+    # Masse à zéro pour err/auth_fail/waf_block (cas de l'idle réel).
+    return np.column_stack(
+        [
+            RNG.uniform(0.1, 15.0, n),  # req/s (repos -> normal)
+            np.where(RNG.random(n) < 0.90, 0.0, np.abs(RNG.normal(0.01, 0.02, n))).clip(0, 1),
+            RNG.uniform(0.01, 0.20, n),  # p95 (s)
+            np.where(RNG.random(n) < 0.70, 0.0, np.abs(RNG.normal(0.10, 0.20, n))),
+            np.where(RNG.random(n) < 0.85, 0.0, np.abs(RNG.normal(0.10, 0.30, n))),
+        ]
+    )
 
 
 def attacks(n: int = 300) -> np.ndarray:
     """Jeu d'attaques synthétiques (pour ÉVALUATION, pas pour l'entraînement) :
     flood (req/s et latence hautes, 429), injection (403 WAF), brute force (auth)."""
-    flood = np.column_stack([
-        RNG.normal(80, 20, n).clip(20, None),
-        np.abs(RNG.normal(0.3, 0.1, n)).clip(0, 1),
-        RNG.normal(2.0, 0.6, n).clip(0.5, None),
-        np.abs(RNG.normal(0.1, 0.1, n)),
-        RNG.normal(15, 5, n).clip(0, None),
-    ])
-    injection = np.column_stack([
-        RNG.normal(12, 4, n).clip(1, None),
-        np.abs(RNG.normal(0.02, 0.02, n)).clip(0, 1),
-        RNG.normal(0.1, 0.03, n).clip(0.01, None),
-        np.abs(RNG.normal(0.2, 0.2, n)),
-        RNG.normal(10, 4, n).clip(0, None),
-    ])
+    flood = np.column_stack(
+        [
+            RNG.normal(80, 20, n).clip(20, None),
+            np.abs(RNG.normal(0.3, 0.1, n)).clip(0, 1),
+            RNG.normal(2.0, 0.6, n).clip(0.5, None),
+            np.abs(RNG.normal(0.1, 0.1, n)),
+            RNG.normal(15, 5, n).clip(0, None),
+        ]
+    )
+    injection = np.column_stack(
+        [
+            RNG.normal(12, 4, n).clip(1, None),
+            np.abs(RNG.normal(0.02, 0.02, n)).clip(0, 1),
+            RNG.normal(0.1, 0.03, n).clip(0.01, None),
+            np.abs(RNG.normal(0.2, 0.2, n)),
+            RNG.normal(10, 4, n).clip(0, None),
+        ]
+    )
     return np.vstack([flood, injection])
 
 
@@ -79,8 +88,10 @@ def main() -> None:
 
     out = Path(__file__).parent / "models"
     out.mkdir(exist_ok=True)
-    dump({"model": clf, "mean": mean, "std": std, "features": FEATURES},
-         out / "anomaly_isoforest.joblib")
+    dump(
+        {"model": clf, "mean": mean, "std": std, "features": FEATURES},
+        out / "anomaly_isoforest.joblib",
+    )
     print(f"\nModèle sauvegardé -> {out / 'anomaly_isoforest.joblib'}")
 
 

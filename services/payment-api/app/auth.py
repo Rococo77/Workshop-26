@@ -1,4 +1,5 @@
 """Vérification du JWT émis par le service auth (secret partagé HS256)."""
+
 from __future__ import annotations
 
 import jwt
@@ -28,8 +29,8 @@ def current_principal(
             options={"require": ["exp", "sub", "iss"]},
         )
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token expired")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "token expired") from None
     except jwt.InvalidTokenError:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token") from None
 
     return Principal(username=payload["sub"], role=payload.get("role", "customer"))

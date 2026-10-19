@@ -2,6 +2,7 @@
 distinguer un trafic nominal d'attaques (flood / injection) avec un rappel
 élevé et peu de faux positifs. Sinon la chaîne de reprise ne se déclenche pas.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -16,6 +17,7 @@ def _fit():
     X = train.nominal()
     mean, std = X.mean(axis=0), X.std(axis=0) + 1e-9
     from sklearn.ensemble import IsolationForest
+
     clf = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
     clf.fit((X - mean) / std)
     return clf, mean, std
