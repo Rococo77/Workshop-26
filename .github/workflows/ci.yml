@@ -191,12 +191,23 @@ jobs:
         run: |
           trivy fs --scanners misconfig,secret --severity MEDIUM,HIGH,CRITICAL \
             --format sarif --output trivy-config.sarif --exit-code 0 .
-      - name: Publier le rapport Trivy
+      # Publication dans l'onglet Security (code scanning). Non bloquant : si le
+      # code scanning n'est pas activé (dépôt privé sans GHAS, PR de fork...),
+      # on n'échoue pas le job — le rapport reste dispo en artefact ci-dessous.
+      - name: Publier le rapport Trivy (onglet Security)
         if: always() && hashFiles('trivy-config.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-config.sarif
           category: trivy-config
+      - name: Rapport Trivy en artefact (repli)
+        if: always() && hashFiles('trivy-config.sarif') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-config-sarif
+          path: trivy-config.sarif
+          retention-days: 7
 
   # ─────────────────────────────────────────────────────────────
   # 6. (Déploiement staging) — documenté : déploiement LOCAL sur PC Hôte
