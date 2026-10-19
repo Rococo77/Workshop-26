@@ -49,13 +49,25 @@
       delay: 5
       until: ready.status == 200
 
+    # Ollama vit sur le réseau `app` (internal: true, sans Internet) : accès
+    # sortant ouvert le temps du pull uniquement, puis refermé quoi qu'il arrive.
     - name: Pré-charger les modèles Ollama
-      ansible.builtin.command: "docker exec ra-ollama ollama pull {{ item }}"
-      loop:
-        - "{{ ollama_model }}"
-        - "nomic-embed-text"
       when: with_ai
-      changed_when: true
+      block:
+        - name: Ouvrir temporairement l'accès Internet d'Ollama
+          ansible.builtin.command: docker network connect bridge ra-ollama
+          changed_when: true
+        - name: Télécharger les modèles
+          ansible.builtin.command: "docker exec ra-ollama ollama pull {{ item }}"
+          loop:
+            - "{{ ollama_model }}"
+            - "nomic-embed-text"
+          changed_when: true
+      always:
+        - name: Refermer l'accès Internet d'Ollama
+          ansible.builtin.command: docker network disconnect bridge ra-ollama
+          changed_when: true
+          failed_when: false
 
     - name: Résumé
       ansible.builtin.debug:
