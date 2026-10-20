@@ -60,6 +60,13 @@ services:
     volumes:
       - waf-dynamic:/etc/nginx/dynamic
       - waf-logs:/var/log/ra
+    # Le healthcheck de l'image CRS sonde https://localhost:8443/healthz, absent
+    # de notre config (seul :8080 est servi) -> toujours "unhealthy" sans ceci.
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-o", "/dev/null", "http://localhost:8080/waf-health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
     networks: [edge, app]
     logging: *default-logging
     labels:
@@ -211,7 +218,8 @@ services:
     environment:
       WAF_ACCESS_LOG: "/var/log/ra/ra_access.log"
     volumes:
-      - waf-logs:/var/log/ra:ro
+      # rw : l'exporter tronque le journal au-delà de WAF_LOG_MAX_BYTES.
+      - waf-logs:/var/log/ra
     networks: [obs]
     logging: *default-logging
     labels:
@@ -296,7 +304,8 @@ services:
   # Profil `ai` : démarrage à la demande (RAM). Ollama peut tourner sur le
   # 3e PC (délestage IA) en pointant OLLAMA_BASE_URL vers son IP.
   ollama:
-    image: ollama/ollama:0.3.12
+    # >= 0.6.6 requis pour l'architecture Qwen3 (et le pull hf.co/...).
+    image: ollama/ollama:0.12.6
     container_name: ra-ollama
     restart: unless-stopped
     volumes:
@@ -314,14 +323,17 @@ services:
     depends_on: [ollama]
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M}
       RAG_EMBED_MODEL: ${RAG_EMBED_MODEL:-nomic-embed-text}
     volumes:
       - ./docs:/app/corpus:ro
     ports:
-      # Console assistant pour les opérateurs (local au PC Hôte, non pédagogique).
-      - "${EDGE_BIND:-127.0.0.1}:8200:8200"
-    networks: [app]
+      # Console assistant pour les opérateurs : TOUJOURS locale au PC Hôte
+      # (sans authentification -> jamais sur EDGE_BIND / le réseau pédagogique).
+      - "127.0.0.1:8200:8200"
+    # `obs` (non interne) : Docker ne publie aucun port d'un conteneur
+    # rattaché uniquement à des réseaux internes (`app`).
+    networks: [app, obs]
     profiles: ["ai"]
     logging: *default-logging
     labels:

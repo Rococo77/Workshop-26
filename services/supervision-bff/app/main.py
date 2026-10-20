@@ -19,6 +19,7 @@ log = logging.getLogger("bff")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 DETECTOR_URL = os.getenv("DETECTOR_URL", "http://ml-detector:9100")
 REMEDIATION_URL = os.getenv("REMEDIATION_URL", "http://remediation-engine:9000")
+WAF_URL = os.getenv("WAF_URL", "http://waf:8080")
 
 app = FastAPI(title="Resilience-Alpha Supervision BFF", version="1.0.0")
 
@@ -39,6 +40,11 @@ def _services_up(client: httpx.Client) -> dict[str, bool]:
     for item in data.get("data", {}).get("result", []):
         svc = item["metric"].get("service") or item["metric"].get("job", "?")
         out[svc] = float(item["value"][1]) == 1.0
+    # Le WAF n'expose pas de /metrics : sonde directe du point d'entrée réel.
+    try:
+        out["waf"] = client.get(f"{WAF_URL}/waf-health", timeout=3).status_code == 200
+    except httpx.HTTPError:
+        out["waf"] = False
     return out
 
 

@@ -3,5 +3,21 @@
 @tailwind utilities;
 
 body {
-  @apply bg-slate-950 text-slate-100;
+  @apply bg-paper text-ink antialiased;
+}
+
+@layer components {
+  .field {
+    @apply mt-1.5 w-full rounded-xl border border-rule bg-white px-4 py-3 text-base text-ink placeholder:text-ink/35;
+  }
+  .field:focus {
+    @apply border-petrol outline-none ring-2 ring-petrol/25;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+button:focus-visible {
+  @apply outline-none ring-2 ring-petrol/40 ring-offset-2 ring-offset-paper;
 }

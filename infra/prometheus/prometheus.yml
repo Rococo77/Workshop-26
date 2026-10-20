@@ -30,11 +30,13 @@ scrape_configs:
       - targets: ["ml-detector:9100"]
         labels: { service: "ml-detector" }
 
-  - job_name: waf
+  # Cible = l'exporter, pas le WAF : son `up` ne dit rien de la santé du WAF
+  # (sondée directement par le BFF sur /waf-health).
+  - job_name: waf-metrics
     metrics_path: /metrics
     static_configs:
       - targets: ["waf-metrics:4040"]
-        labels: { service: "waf" }
+        labels: { service: "waf-metrics" }
 
   - job_name: prometheus
     static_configs:

@@ -36,7 +36,7 @@ python attack/flood.py --target http://192.168.137.1:8080 --duration 40 --worker
 - Front + dashboard : http://127.0.0.1:8080
 - Grafana : http://127.0.0.1:3000
 
-Assistant IA (optionnel, RAM) : `docker compose --profile ai up -d --build`.
+Assistant IA (optionnel) : `scripts/up-ai.sh` (Ollama sur GPU NVIDIA si disponible, sinon CPU).
 
 > **Raccourcis `make` (optionnels, sous WSL/Linux/macOS).** Un `Makefile`
 > enveloppe ces commandes pour plus de concision : `make up`, `make verify`,

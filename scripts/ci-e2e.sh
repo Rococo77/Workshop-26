@@ -27,7 +27,11 @@ cleanup() {
       echo "---- logs $c ----"; docker logs "$c" --tail 40 2>&1 || true
     done
   fi
-  docker compose --profile ai down -v >/dev/null 2>&1 || true
+  # Volumes supprimés en CI uniquement : en local, on préserve les données
+  # (Postgres, Grafana, modèle Ollama) et la stack reste démarrée.
+  if [ -n "${CI:-}" ]; then
+    docker compose --profile ai down -v >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 

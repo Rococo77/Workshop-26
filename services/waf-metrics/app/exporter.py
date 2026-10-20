@@ -24,6 +24,13 @@ log = logging.getLogger("waf-metrics")
 
 LOG_FILE = os.getenv("WAF_ACCESS_LOG", "/var/log/nginx/ra_access.log")
 PORT = int(os.getenv("EXPORTER_PORT", "4040"))
+# Plafond du journal fichier (pas de logrotate dans le WAF) : au-delà, l'exporter
+# le tronque. Sûr : nginx écrit en O_APPEND et repart à 0 après troncature.
+MAX_LOG_BYTES = int(os.getenv("WAF_LOG_MAX_BYTES", str(50 * 1024 * 1024)))
+
+# Le verbe vient du client : sans liste fermée, un attaquant crée une série
+# Prometheus par méthode inventée (cardinalité non bornée = DoS du pipeline).
+_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 
 # Nom de métrique aligné sur les requêtes du détecteur.
 RESPONSES = Counter(
@@ -37,11 +44,13 @@ _LINE = re.compile(r'^\S+ \S+ \S+ \[[^\]]*\] "([A-Z]+) [^"]*" (\d{3})')
 def _parse(line: str) -> None:
     m = _LINE.match(line)
     if m:
-        RESPONSES.labels(status=m.group(2), method=m.group(1)).inc()
+        method = m.group(1) if m.group(1) in _METHODS else "OTHER"
+        RESPONSES.labels(status=m.group(2), method=method).inc()
 
 
 def _follow(path: str):
     """Suit le fichier (comme tail -F) en tolérant son absence et sa rotation."""
+    cap = MAX_LOG_BYTES
     while True:
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
@@ -54,6 +63,13 @@ def _follow(path: str):
                         yield line
                         continue
                     time.sleep(0.2)
+                    if f.tell() > cap:
+                        try:
+                            os.truncate(path, 0)  # rattrapé par la détection ci-dessous
+                        except OSError as exc:
+                            # Volume créé avant le journal en 0666 : on continue sans plafond.
+                            log.warning("troncature du journal impossible: %s", exc)
+                            cap = float("inf")
                     # Détection de rotation / troncature -> réouverture.
                     try:
                         if os.stat(path).st_ino != inode or os.stat(path).st_size < f.tell():

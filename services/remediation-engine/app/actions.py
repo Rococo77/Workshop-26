@@ -40,29 +40,33 @@ def _client() -> docker.DockerClient:
 
 
 def _valid_ip(ip: str) -> bool:
+    """IP bien formée ET hors des plages protégées (infra, passerelle Docker)."""
     try:
-        ipaddress.ip_address(ip)
-        return True
+        addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    return not any(addr in net for net in config.PROTECTED_NETWORKS)
 
 
 def block_ip(ip: str) -> bool:
     """Ajoute une IP à la blocklist WAF puis recharge nginx.
 
     Idempotent : réécrit intégralement le fichier de blocklist. Ne bloque
-    jamais une IP invalide ni une plage privée de l'infra interne.
+    jamais une IP invalide ni une plage protégée (config.PROTECTED_NETWORKS).
+    Une IP bloquée reçoit 444 (connexion fermée) et non 403 : le trafic d'une
+    source déjà confinée ne doit pas être requalifié en injection (403 = CRS).
     """
     if not _valid_ip(ip):
-        log.warning("block_ip refusé: IP invalide %r", ip)
+        log.warning("block_ip refusé: IP invalide ou protégée %r", ip)
         return False
+    ip = str(ipaddress.ip_address(ip))  # forme canonique, comme $remote_addr
 
     with _lock:
         _blocked_ips.add(ip)
         snapshot = sorted(_blocked_ips)
 
     lines = ["# Blocklist dynamique — générée par le moteur de remédiation\n"]
-    lines += [f"deny {b};\n" for b in snapshot]
+    lines += [f'if ($remote_addr = "{b}") {{ return 444; }}\n' for b in snapshot]
     Path(config.WAF_DYNAMIC_DIR).mkdir(parents=True, exist_ok=True)
     target = os.path.join(config.WAF_DYNAMIC_DIR, "blocklist.conf")
     # Écriture atomique (tmp + rename) pour éviter un reload sur fichier partiel.
@@ -113,7 +117,8 @@ def top_attacker_ip(window_s: int = 120) -> str | None:
     (docker logs), indépendamment de la latence d'ingestion de Loki.
 
     On ne retient que les IP générant des rejets (403/429) : ce sont des clients
-    externes malveillants, jamais les services internes. Retourne la plus active.
+    externes malveillants, jamais les services internes. Les IP déjà bloquées
+    sont ignorées, pour qu'un 2e attaquant soit résolu. Retourne la plus active.
     """
     try:
         waf = _client().containers.get(config.WAF_CONTAINER)
@@ -125,11 +130,14 @@ def top_attacker_ip(window_s: int = 120) -> str | None:
         log.error("lecture des logs WAF impossible: %s", exc)
         return None
 
+    already = set(blocked_ips())
     counts: Counter[str] = Counter()
     for line in raw.splitlines():
         m = _ACCESS_RE.match(line)
-        if m and m.group(2) in ("403", "429") and _valid_ip(m.group(1)):
-            counts[m.group(1)] += 1
+        if m and m.group(2) in ("403", "429"):
+            src = m.group(1)
+            if src not in already and _valid_ip(src):
+                counts[src] += 1
     if not counts:
         return None
     ip, n = counts.most_common(1)[0]

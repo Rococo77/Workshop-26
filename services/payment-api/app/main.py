@@ -32,7 +32,9 @@ CANARY_SRC, CANARY_DST, CANARY_USER = 1, 2, "alice"
 
 class TransferRequest(BaseModel):
     src_account: int = Field(gt=0)
-    dst_account: int = Field(gt=0)
+    # Bénéficiaire : par id (canari, scripts) ou par IBAN (front client).
+    dst_account: int | None = Field(default=None, gt=0)
+    dst_iban: str | None = Field(default=None, min_length=4, max_length=34)
     amount: str = Field(description="Montant décimal, ex. '12.50'")
 
 
@@ -81,12 +83,17 @@ def create_transaction(
         amount = Decimal(req.amount)
     except (InvalidOperation, ValueError):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid amount") from None
+    if (req.dst_account is None) == (req.dst_iban is None):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "provide either dst_account or dst_iban"
+        )
 
     try:
+        dst_account = req.dst_account or service.account_id_by_iban(req.dst_iban)
         tx = service.transfer(
             username=principal.username,
             src_account=req.src_account,
-            dst_account=req.dst_account,
+            dst_account=dst_account,
             amount=amount,
         )
         PAYMENT_TX.labels(result="settled").inc()
@@ -111,13 +118,23 @@ def create_transaction(
 def list_transactions(
     limit: int = 20, principal: Principal = Depends(current_principal)
 ) -> list[dict]:
+    """Historique du client : uniquement les opérations touchant SES comptes
+    (avant : toutes les transactions de la plateforme, quel que soit l'appelant)."""
     limit = max(1, min(limit, 100))  # pagination bornée (anti-dump)
     try:
         with db.get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, reference, amount, status, is_canary, created_at "
-                "FROM payment_tx ORDER BY created_at DESC LIMIT %s",
-                (limit,),
+                "SELECT t.id, t.reference, t.amount, t.status, t.is_canary, t.created_at, "
+                "s.iban_fake AS src_iban, d.iban_fake AS dst_iban, "
+                "(su.username = %(u)s) AS outgoing "
+                "FROM payment_tx t "
+                "JOIN account s ON s.id = t.src_account "
+                "JOIN account d ON d.id = t.dst_account "
+                "JOIN app_user su ON su.id = s.owner_id "
+                "JOIN app_user du ON du.id = d.owner_id "
+                "WHERE su.username = %(u)s OR du.username = %(u)s "
+                "ORDER BY t.created_at DESC LIMIT %(n)s",
+                {"u": principal.username, "n": limit},
             ).fetchall()
         return rows
     except Exception as exc:

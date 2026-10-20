@@ -19,6 +19,16 @@ class BusinessError(Exception):
     """Erreur métier attendue (ex. solde insuffisant) -> 4xx, pas 500."""
 
 
+def account_id_by_iban(iban: str) -> int:
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM account WHERE iban_fake = %s", (iban.strip().upper(),)
+        ).fetchone()
+    if row is None:
+        raise BusinessError("destination account not found")
+    return row["id"]
+
+
 def _get_account_for_user(conn: psycopg.Connection, account_id: int, username: str) -> dict:
     row = conn.execute(
         "SELECT a.id, a.balance FROM account a "
