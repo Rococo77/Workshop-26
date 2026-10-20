@@ -96,6 +96,32 @@ docker kill ra-payment-api     # le détecteur voit up==0 -> restart auto -> can
 | WAF ne bloque pas | reload échoué | `docker logs ra-remediation`, vérifier le volume `waf-dynamic` |
 | RAG en 503 | Ollama absent / modèle non pull | `scripts/up-ai.sh`, puis (réseau `app` sans Internet) `docker network connect bridge ra-ollama`, `docker exec ra-ollama ollama pull hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M` et `nomic-embed-text`, `docker network disconnect bridge ra-ollama` |
 | Front inaccessible | Vite pas démarré | `docker compose logs frontend` |
+| Pas de caméra dans le navigateur | `getUserMedia` exige HTTPS ou `localhost` | depuis un autre PC en HTTP, le front propose « Prendre ou importer une photo » (caméra directe sur mobile) ; ou Chrome `--unsafely-treat-insecure-origin-as-secure=http://192.168.137.1:8080` |
+| Virement : « visage non reconnu » systématique | éclairage / enrôlement de mauvaise qualité | réenrôler (voir ci-dessous) ; seuil `FACE_MATCH_THRESHOLD` |
+| `face_unavailable` (503) | `face-api` arrêtée | `docker compose logs face-api` ; le virement reste en attente 5 min |
+
+### Validation faciale : migration et réenrôlement
+
+```bash
+# Base existante (créée avant la validation faciale) : script idempotent
+docker exec -i ra-postgres psql -U payuser -d paymentdb < services/payment-api/db/init/03_face_verification.sql
+
+# Lier un visage à un client depuis une photo (opérateur, hors parcours web).
+# Nouveau client + compte :
+scripts/enroll-face.sh moi.jpg jordan --create --password 'Jordan#2026' --balance 2500
+# Client existant (--replace pour écraser une empreinte déjà présente) :
+scripts/enroll-face.sh moi.jpg alice
+# Sans bash (PowerShell) :
+#   docker cp moi.jpg ra-payment-api:/tmp/face.jpg
+#   docker exec ra-payment-api python -m app.enroll_cli --username alice --photo /tmp/face.jpg
+#   docker exec -u root ra-payment-api rm -f /tmp/face.jpg
+# L'empreinte vit en base (volume pgdata) : à refaire après `docker compose down -v`.
+# Ne jamais la versionner dans un seed : donnée biométrique (RGPD art. 9).
+
+# Réenrôler un client (supprime son empreinte, il refera la photo à la connexion)
+docker exec ra-postgres psql -U payuser -d paymentdb -c \
+  "DELETE FROM face_enrollment WHERE user_id = (SELECT id FROM app_user WHERE username = 'alice')"
+```
 
 ## 8. Arrêt / remise à zéro
 

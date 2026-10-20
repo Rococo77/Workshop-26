@@ -4,6 +4,7 @@ Les features clés de détection sont dérivées de :
   - http_requests_total{status}         -> taux de requêtes, ratio 5xx/4xx
   - http_request_duration_seconds       -> latence p95
   - payment_tx_total{result}            -> santé métier (échecs de transaction)
+  - face_verifications_total{purpose,result} -> échecs/spoofs de reconnaissance faciale
 """
 
 from __future__ import annotations
@@ -22,6 +23,14 @@ HTTP_LATENCY = Histogram(
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
 PAYMENT_TX = Counter("payment_tx_total", "Transactions métier", ["result"])
+FACE_VERIFICATIONS = Counter(
+    "face_verifications_total", "Vérifications faciales", ["purpose", "result"]
+)
+FACE_LATENCY = Histogram(
+    "face_verification_duration_seconds",
+    "Latence de l'API DeepFace",
+    buckets=(0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0),
+)
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):

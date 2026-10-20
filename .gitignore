@@ -38,3 +38,8 @@ infra/loki/data/
 .idea/
 .vscode/
 *.swp
+
+# Photos de visage (donnée biométrique, RGPD art. 9) : jamais versionnées.
+services/face-api/*.jpg
+services/face-api/*.jpeg
+services/face-api/*.png

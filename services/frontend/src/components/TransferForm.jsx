@@ -1,13 +1,18 @@
 import { useState } from "react";
-import { createTransaction } from "../api.js";
+import { cancelTransaction, confirmTransaction, createTransaction } from "../api.js";
 import { formatEur, normalizeAmount } from "../format.js";
+import FaceCapture from "./FaceCapture.jsx";
 
-export default function TransferForm({ token, account, recentIbans, onSent, onFailure }) {
+const time = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+export default function TransferForm({ token, account, recentIbans, onSent, onFailure, onEnrollmentRequired }) {
   const [iban, setIban] = useState("");
   const [amount, setAmount] = useState("");
   const [sending, setSending] = useState(false);
   const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState(null);
+  // Virement créé côté API, en attente de la photo de confirmation.
+  const [pending, setPending] = useState(null);
 
   const value = Number(normalizeAmount(amount));
   const valid = iban.trim().length >= 4 && value > 0;
@@ -19,21 +24,91 @@ export default function TransferForm({ token, account, recentIbans, onSent, onFa
     setReceipt(null);
     setError(null);
     try {
+      const dst = iban.trim().toUpperCase();
       const tx = await createTransaction(token, {
         src_account: account.id,
-        dst_iban: iban.trim().toUpperCase(),
+        dst_iban: dst,
         amount: normalizeAmount(amount),
       });
-      setReceipt({ ...tx, iban: iban.trim().toUpperCase() });
-      setAmount("");
+      if (tx.status === "pending") {
+        setPending({ ...tx, iban: dst, attempt: 0 });
+      } else {
+        setReceipt({ ...tx, iban: dst });
+        setAmount("");
+      }
       onSent();
     } catch (err) {
+      if (err.code === "face_not_enrolled") onEnrollmentRequired();
       setError(err.message);
-      onFailure(err);
+      if (!err.code) onFailure(err);
     } finally {
       setSending(false);
     }
   };
+
+  const confirm = async (image) => {
+    setSending(true);
+    setError(null);
+    try {
+      const tx = await confirmTransaction(token, pending.id, image);
+      setReceipt({ ...tx, iban: pending.iban });
+      setPending(null);
+      setAmount("");
+      onSent();
+    } catch (err) {
+      if (err.attemptsLeft === 0 || err.status === 409) {
+        // Virement clos côté API (essais épuisés, expiré...) : retour au formulaire.
+        setPending(null);
+        setError(err.attemptsLeft === 0 ? "Virement refusé : votre visage n'a pas été reconnu." : err.message);
+        onSent();
+      } else {
+        const left = err.attemptsLeft != null ? ` Essais restants : ${err.attemptsLeft}.` : "";
+        setError(err.message + left);
+        setPending((p) => ({ ...p, attempt: p.attempt + 1 }));
+      }
+      if (!err.code) onFailure(err);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const cancel = async () => {
+    const id = pending.id;
+    setPending(null);
+    setError(null);
+    try {
+      await cancelTransaction(token, id);
+    } catch {
+      // Sans annulation explicite, le virement expire de lui-même.
+    }
+    onSent();
+  };
+
+  if (pending) {
+    return (
+      <section aria-labelledby="confirm-title" className="rounded-2xl border border-rule bg-white p-6">
+        <h2 id="confirm-title" className="text-lg font-semibold">
+          Confirmez avec votre visage
+        </h2>
+        <p className="mt-2 text-sm text-ink/70">
+          Virement de <span className="font-semibold text-ink">{formatEur(pending.amount)}</span> vers{" "}
+          <span className="tabular">{pending.iban}</span>. À valider avant {time.format(new Date(pending.expires_at))}.
+        </p>
+        <div className="mt-5">
+          <FaceCapture
+            key={pending.attempt}
+            busy={sending}
+            submitLabel={`Valider ${formatEur(pending.amount)}`}
+            onSubmit={confirm}
+            onCancel={cancel}
+          />
+        </div>
+        <div aria-live="polite">
+          {error && <p className="mt-4 rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section aria-labelledby="transfer-title" className="rounded-2xl bg-white border border-rule p-6">
@@ -93,7 +168,7 @@ export default function TransferForm({ token, account, recentIbans, onSent, onFa
           disabled={!valid || sending}
           className="w-full rounded-xl bg-petrol px-4 py-3 font-semibold text-white hover:bg-petrol-deep disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {sending ? "Envoi en cours…" : valid ? `Envoyer ${formatEur(value)}` : "Envoyer"}
+          {sending ? "Envoi en cours…" : valid ? `Continuer avec ${formatEur(value)}` : "Continuer"}
         </button>
       </form>
 

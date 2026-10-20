@@ -8,6 +8,7 @@
 #    data    -> Postgres, strictement interne
 #    obs     -> chaîne d'observabilité
 #    control -> moteur de remédiation (accès socket Docker), isolé
+#    biometric -> API de reconnaissance faciale, joignable par payment-api seul
 # ============================================================================
 
 name: resilience-alpha
@@ -26,6 +27,8 @@ networks:
     internal: true
   obs:
   control:
+    internal: true
+  biometric:
     internal: true
 
 volumes:
@@ -102,7 +105,12 @@ services:
       AUTH_BASE_URL: "http://auth:8000"
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-    networks: [app, data]
+      FACE_CONFIRMATION_REQUIRED: ${FACE_CONFIRMATION_REQUIRED:-true}
+      FACE_API_URL: "http://face-api:5000"
+      FACE_API_TOKEN: ${FACE_API_TOKEN:?FACE_API_TOKEN manquant dans .env}
+      FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.30}
+      FACE_ANTI_SPOOFING: ${FACE_ANTI_SPOOFING:-true}
+    networks: [app, data, biometric]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
       interval: 10s
@@ -112,6 +120,29 @@ services:
     logging: *default-logging
     labels:
       ra.role: "business-api"
+
+  # ------------------------------------------- Reconnaissance faciale (DeepFace)
+  # API officielle github.com/serengil/deepface (tag épinglé), moteur ONNX.
+  # Réseau `biometric` interne : seul payment-api la joint, jamais le WAF ni
+  # l'extérieur ; jeton Bearer en plus. Poids des modèles embarqués à la
+  # construction (pas d'accès Internet à l'exécution).
+  face-api:
+    build: ./services/face-api
+    container_name: ra-face-api
+    restart: unless-stopped
+    environment:
+      # Jeton vide = authentification DeepFace DÉSACTIVÉE : on l'exige.
+      DEEPFACE_AUTH_TOKEN: ${FACE_API_TOKEN:?FACE_API_TOKEN manquant dans .env}
+    networks: [biometric]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/').status==200 else 1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+    labels:
+      ra.role: "face-recognition"
 
   # ------------------------------------------------------- Service d'auth (JWT)
   auth:

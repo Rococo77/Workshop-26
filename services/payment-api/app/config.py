@@ -17,6 +17,22 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
 
+    # Validation faciale des virements (API DeepFace interne).
+    face_confirmation_required: bool = True
+    face_api_url: str = "http://face-api:5000"
+    face_api_token: str = ""
+    face_api_timeout_seconds: float = 30.0
+    face_model: str = "Facenet512"
+    face_detector: str = "yunet"
+    face_anti_spoofing: bool = True
+    # Seuil de distance cosinus Facenet512 recommandé par DeepFace (0.30).
+    face_match_threshold: float = 0.30
+    face_confirm_ttl_seconds: int = 300
+    face_max_attempts_per_tx: int = 3
+    # Verrou anti-force brute : N échecs sur la fenêtre -> 429.
+    face_lockout_failures: int = 5
+    face_lockout_minutes: int = 15
+
     @property
     def dsn(self) -> str:
         return (

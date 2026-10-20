@@ -2,7 +2,7 @@
 #  PROJECT RESILIENCE-ALPHA — commandes d'exploitation
 # ============================================================================
 .PHONY: help env up up-ai down logs ps reset demo attack-flood attack-sqli attack-exfil \
-        train test verify
+        train test verify enroll-face
 
 TARGET ?= http://127.0.0.1:8080
 
@@ -52,3 +52,6 @@ train: ## (Ré)entraîne et évalue le modèle de détection
 
 test: ## Lance les tests
 	python3 -m pytest -q tests/
+
+enroll-face: ## Lie le visage d'une photo à un client : make enroll-face PHOTO=moi.jpg USER=jordan ARGS="--create --password X"
+	bash scripts/enroll-face.sh $(PHOTO) $(USER) $(ARGS)
