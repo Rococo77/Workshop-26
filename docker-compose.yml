@@ -254,6 +254,9 @@ services:
       PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
       DETECTOR_URL: "http://ml-detector:9100"
       REMEDIATION_URL: "http://remediation-engine:9000"
+      # Vérifie les JWT du service auth : /overview réservé à operator/admin.
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
     # app -> joignable par le WAF ; obs/control -> lecture de l'état (aucun droit
     # d'action : seule l'écriture /incident du moteur exige le jeton interne).
     networks: [app, obs, control]

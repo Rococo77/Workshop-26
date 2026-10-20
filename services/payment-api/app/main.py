@@ -17,7 +17,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from . import db, service
-from .auth import Principal, current_principal
+from .auth import Principal, current_customer
 from .metrics import PAYMENT_TX, MetricsMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -61,7 +61,7 @@ def metrics() -> Response:
 
 
 @app.get("/accounts/me")
-def my_accounts(principal: Principal = Depends(current_principal)) -> list[dict]:
+def my_accounts(principal: Principal = Depends(current_customer)) -> list[dict]:
     try:
         with db.get_conn() as conn:
             rows = conn.execute(
@@ -77,7 +77,7 @@ def my_accounts(principal: Principal = Depends(current_principal)) -> list[dict]
 
 @app.post("/transactions", status_code=status.HTTP_201_CREATED)
 def create_transaction(
-    req: TransferRequest, principal: Principal = Depends(current_principal)
+    req: TransferRequest, principal: Principal = Depends(current_customer)
 ) -> dict:
     try:
         amount = Decimal(req.amount)
@@ -116,7 +116,7 @@ def create_transaction(
 
 @app.get("/transactions")
 def list_transactions(
-    limit: int = 20, principal: Principal = Depends(current_principal)
+    limit: int = 20, principal: Principal = Depends(current_customer)
 ) -> list[dict]:
     """Historique du client : uniquement les opérations touchant SES comptes
     (avant : toutes les transactions de la plateforme, quel que soit l'appelant)."""

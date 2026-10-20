@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { getOverview } from "./api.js";
+import { useCallback, useEffect, useState } from "react";
+import { getOverview, login } from "./api.js";
 import ScoreChart from "./components/ScoreChart.jsx";
 
 // Supervision de la reprise (jury, opérateur) : raconte l'incident avant /
@@ -59,7 +59,33 @@ function phaseOf(data, now, proof) {
   return { kind: "nominal" };
 }
 
-function useSupervision() {
+// Jeton opérateur conservé le temps de l'onglet (rechargement sans reconnexion).
+const TOKEN_KEY = "ra-supervision-token";
+export function saveSupervisionToken(token) {
+  try {
+    sessionStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    // stockage indisponible (navigation privée) : reconnexion au rechargement
+  }
+}
+function readSupervisionToken() {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+function clearSupervisionToken() {
+  try {
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // rien à effacer
+  }
+}
+
+const SUPERVISION_ROLES = new Set(["operator", "admin"]);
+
+function useSupervision(token, onAuthError) {
   const [data, setData] = useState(null);
   const [samples, setSamples] = useState([]);
   const [lastOk, setLastOk] = useState(0);
@@ -69,13 +95,15 @@ function useSupervision() {
     let active = true;
     const poll = async () => {
       try {
-        const d = await getOverview();
+        const d = await getOverview(token);
         if (!active) return;
         setData(d);
         setLastOk(Date.now());
         setSamples((s) => [...s, { t: Date.now(), score: d.detector?.last_score ?? 0 }].slice(-WINDOW));
-      } catch {
-        // pendant une attaque la supervision peut être ralentie : on garde l'affichage
+      } catch (err) {
+        if (err.status === 401) onAuthError("Votre session a expiré. Reconnectez-vous.");
+        else if (err.status === 403) onAuthError("Ce compte n'a pas accès à la supervision.");
+        // sinon (attaque en cours, 429...) : on garde le dernier affichage
       }
       if (active) setNow(Date.now());
     };
@@ -85,7 +113,7 @@ function useSupervision() {
       active = false;
       clearInterval(id);
     };
-  }, []);
+  }, [token, onAuthError]);
 
   return { data, samples, stale: lastOk > 0 && now - lastOk > 3 * POLL_MS, lastOk, now };
 }
@@ -113,8 +141,108 @@ function useRecoveryClock(data, events) {
   return { startedAt, proof, measured: measured ?? lastMeasured };
 }
 
+// Accès réservé aux rôles operator et admin (vérifié aussi côté BFF).
 export default function Supervision() {
-  const { data, samples, stale, lastOk, now } = useSupervision();
+  const [token, setToken] = useState(readSupervisionToken);
+  const [notice, setNotice] = useState(null);
+  const onAuthError = useCallback((message) => {
+    clearSupervisionToken();
+    setNotice(message);
+    setToken(null);
+  }, []);
+
+  if (!token) {
+    return (
+      <SupervisionLogin
+        notice={notice}
+        onLogin={(t) => {
+          saveSupervisionToken(t);
+          setNotice(null);
+          setToken(t);
+        }}
+      />
+    );
+  }
+  return <Console token={token} onAuthError={onAuthError} onLogout={() => onAuthError(null)} />;
+}
+
+function SupervisionLogin({ notice, onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      const res = await login(username.trim(), password);
+      if (!SUPERVISION_ROLES.has(res.role)) {
+        setError("Ce compte n'a pas accès à la supervision. Utilisez un compte opérateur.");
+        setPending(false);
+        return;
+      }
+      onLogin(res.access_token);
+    } catch (err) {
+      setError(err.message);
+      setPending(false);
+    }
+  };
+
+  return (
+    <main className="flex min-h-screen items-center justify-center px-6">
+      <div className="w-full max-w-sm">
+        <span className="text-xl font-bold tracking-tight text-petrol">Alpha</span>
+        <h1 className="mt-6 text-2xl font-semibold tracking-tight">Supervision de la reprise</h1>
+        <p className="mt-2 text-ink/70">Accès réservé à l&apos;exploitation (rôle opérateur).</p>
+        <form onSubmit={submit} className="mt-8 space-y-5">
+          <div>
+            <label htmlFor="sup-username" className="block text-sm font-medium">
+              Identifiant
+            </label>
+            <input
+              id="sup-username"
+              className="field"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="sup-password" className="block text-sm font-medium">
+              Mot de passe
+            </label>
+            <input
+              id="sup-password"
+              type="password"
+              className="field"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+          <button
+            disabled={pending}
+            className="w-full rounded-xl bg-petrol px-4 py-3 font-semibold text-white hover:bg-petrol-deep disabled:opacity-50"
+          >
+            {pending ? "Connexion…" : "Ouvrir la supervision"}
+          </button>
+          <div aria-live="polite">
+            {(error || notice) && (
+              <p className="rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error || notice}</p>
+            )}
+          </div>
+        </form>
+      </div>
+    </main>
+  );
+}
+
+function Console({ token, onAuthError, onLogout }) {
+  const { data, samples, stale, lastOk, now } = useSupervision(token, onAuthError);
   const events = data?.remediation?.events || [];
   const { startedAt, proof, measured } = useRecoveryClock(data, events);
   const phase = data ? phaseOf(data, now, proof) : { kind: "loading" };
@@ -133,9 +261,9 @@ export default function Supervision() {
               ? `Données figées depuis ${Math.round((now - lastOk) / 1000)} s`
               : `Actualisé toutes les ${POLL_MS / 1000} s`}
           </span>
-          <a href="/" className="text-sm font-medium text-petrol hover:underline">
-            Espace client
-          </a>
+          <button onClick={onLogout} className="text-sm font-medium text-petrol hover:underline">
+            Se déconnecter
+          </button>
         </div>
       </header>
 

@@ -11,7 +11,9 @@ import logging
 import os
 
 import httpx
-from fastapi import FastAPI
+import jwt
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("bff")
@@ -20,8 +22,35 @@ PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 DETECTOR_URL = os.getenv("DETECTOR_URL", "http://ml-detector:9100")
 REMEDIATION_URL = os.getenv("REMEDIATION_URL", "http://remediation-engine:9000")
 WAF_URL = os.getenv("WAF_URL", "http://waf:8080")
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me")
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+
+# La vue détaillée (IP bloquées, alertes, étapes des playbooks) est réservée à
+# l'exploitation ; les clients n'ont accès qu'à /status (ok / perturbé).
+SUPERVISION_ROLES = frozenset({"operator", "admin"})
+CRITICAL = ("auth", "payment-api", "waf")
 
 app = FastAPI(title="Resilience-Alpha Supervision BFF", version="1.0.0")
+_bearer = HTTPBearer(auto_error=False)
+
+
+def require_supervisor(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) -> str:
+    """JWT émis par le service auth (secret partagé), rôle operator ou admin."""
+    if creds is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "authentication required")
+    try:
+        payload = jwt.decode(
+            creds.credentials,
+            JWT_SECRET,
+            algorithms=[JWT_ALGORITHM],
+            issuer="resilience-alpha-auth",
+            options={"require": ["exp", "sub", "iss"]},
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token") from None
+    if payload.get("role") not in SUPERVISION_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "supervision role required")
+    return payload["sub"]
 
 
 def _get_json(client: httpx.Client, url: str, default):
@@ -68,8 +97,17 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/status")
+def public_status() -> dict:
+    """État du service vu par un client : uniquement ok / perturbé, sans détail
+    interne (ni IP, ni alertes, ni mécanique de remédiation)."""
+    with httpx.Client(timeout=5) as client:
+        services = _services_up(client)
+    return {"ok": all(services.get(name, True) for name in CRITICAL)}
+
+
 @app.get("/overview")
-def overview() -> dict:
+def overview(_: str = Depends(require_supervisor)) -> dict:
     """Vue consolidée : services, détection, alertes, remédiation."""
     with httpx.Client(timeout=5) as client:
         services = _services_up(client)

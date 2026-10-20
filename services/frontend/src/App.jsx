@@ -5,7 +5,7 @@ import Guilloche from "./components/Guilloche.jsx";
 import History from "./components/History.jsx";
 import TransferForm from "./components/TransferForm.jsx";
 import { StatusBanner, StatusPill, useServiceStatus } from "./components/ServiceStatus.jsx";
-import Supervision from "./Supervision.jsx";
+import Supervision, { saveSupervisionToken } from "./Supervision.jsx";
 
 // Erreurs révélatrices d'un incident (réseau, rate-limit, indisponibilité).
 const INCIDENT_STATUSES = new Set([0, 429, 502, 503, 504]);
@@ -39,6 +39,12 @@ function Login({ onLogin }) {
     setError(null);
     try {
       const res = await login(username.trim(), password);
+      if (res.role !== "customer") {
+        // operator / admin : pas de comptes bancaires, leur espace est la supervision.
+        saveSupervisionToken(res.access_token);
+        window.location.assign("/supervision");
+        return;
+      }
       onLogin({ token: res.access_token, username: username.trim() });
     } catch (err) {
       setError(err.message);
