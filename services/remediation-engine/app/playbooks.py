@@ -51,7 +51,12 @@ def handle_dos_flood(source_ip: str | None, service: str) -> RemediationResult:
         r.contained = ok
         r.step(f"blocage IP source {source_ip} au WAF: {'OK' if ok else 'ÉCHEC'}")
     else:
-        r.step("aucune IP source identifiée — mitigation par rate-limit WAF (baseline)")
+        # Sous Docker Desktop, tous les clients arrivent via la passerelle du bridge
+        # (adresse protégée) : bloquer couperait tout le monde.
+        r.step(
+            "aucune IP attaquante attribuable (clients vus derrière la passerelle Docker)"
+            " — mitigation par rate-limit WAF"
+        )
 
     # Si l'API a saturé au point de devenir malsaine, on la relance une fois.
     container = {"payment-api": "ra-payment-api", "auth": "ra-auth"}.get(service)

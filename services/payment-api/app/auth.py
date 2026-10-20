@@ -34,3 +34,11 @@ def current_principal(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token") from None
 
     return Principal(username=payload["sub"], role=payload.get("role", "customer"))
+
+
+def current_customer(principal: Principal = Depends(current_principal)) -> Principal:
+    """Opérations bancaires réservées au rôle customer : operator et admin
+    supervisent la plateforme (/supervision) mais n'opèrent pas de paiements."""
+    if principal.role != "customer":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "customer role required")
+    return principal

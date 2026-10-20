@@ -30,6 +30,18 @@ _model = AnomalyModel()
 _state: dict = {"last_features": {}, "last_score": 0.0, "last_decision": "normal", "last_ts": None}
 _stop = threading.Event()
 _last_sent = 0.0
+# Incident en cours (None = situation normale) et issue de sa dernière remédiation.
+_open_incident: str | None = None
+_last_outcome: str | None = None
+
+
+def _should_send(incident_type: str, in_cooldown: bool) -> bool:
+    """Un incident = une remédiation. Tant que l'anomalie persiste, on ne relance
+    que si la remédiation précédente a échoué, ou si la nature de l'incident
+    change (ex. DoS puis API injoignable). Avant : relance à chaque cooldown."""
+    if in_cooldown:
+        return False
+    return incident_type != _open_incident or _last_outcome == "failed"
 
 
 def _service_down(client: httpx.Client) -> bool:
@@ -46,7 +58,9 @@ def _service_down(client: httpx.Client) -> bool:
 
 
 def _send_incident(client: httpx.Client, payload: dict) -> None:
-    global _last_sent
+    global _last_sent, _open_incident, _last_outcome
+    _open_incident = payload["type"]
+    _last_outcome = "failed"  # écrasé par l'issue réelle si le moteur répond
     try:
         r = client.post(
             f"{config.REMEDIATION_URL}/incident",
@@ -57,7 +71,8 @@ def _send_incident(client: httpx.Client, payload: dict) -> None:
         r.raise_for_status()
         INCIDENTS_SENT.labels(result="ok").inc()
         _last_sent = time.monotonic()
-        log.info("incident transmis et traité: %s", r.json().get("outcome"))
+        _last_outcome = r.json().get("outcome", "failed")
+        log.info("incident transmis et traité: %s", _last_outcome)
     except httpx.HTTPError as exc:
         INCIDENTS_SENT.labels(result="error").inc()
         log.error("envoi incident échoué: %s", exc)
@@ -75,6 +90,7 @@ def _detection_loop() -> None:
 
 
 def _tick(client: httpx.Client) -> None:
+    global _open_incident
     now = time.monotonic()
     in_cooldown = (now - _last_sent) < config.COOLDOWN_SECONDS
 
@@ -83,13 +99,13 @@ def _tick(client: httpx.Client) -> None:
         ANOMALY_SCORE.set(1.0)
         _update_state({}, 1.0, "service_unavailable")
         DETECTIONS.labels(incident_type="service_unavailable").inc()
-        if not in_cooldown:
+        if _should_send("service_unavailable", in_cooldown):
             _send_incident(
                 client,
                 {
                     "type": "service_unavailable",
                     "service": "payment-api",
-                    "detail": "up==0",
+                    "detail": "API de paiement injoignable (up==0)",
                     "anomaly_score": 1.0,
                 },
             )
@@ -102,6 +118,7 @@ def _tick(client: httpx.Client) -> None:
 
     if not is_anomaly:
         _update_state(features, score, "normal")
+        _open_incident = None  # incident clos : le prochain sera traité
         return
 
     incident_type = sources.classify_attack(client)
@@ -111,7 +128,7 @@ def _tick(client: httpx.Client) -> None:
     DETECTIONS.labels(incident_type=incident_type).inc()
     log.warning("ANOMALIE: type=%s score=%.2f drivers=%s", incident_type, score, drivers)
 
-    if not in_cooldown:
+    if _should_send(incident_type, in_cooldown):
         _send_incident(
             client,
             {

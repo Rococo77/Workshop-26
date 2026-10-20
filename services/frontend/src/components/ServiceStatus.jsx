@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { getOverview } from "../api.js";
+import { getStatus } from "../api.js";
 
 // État du service vu par le client : ce qu'une banque afficherait pendant un
 // incident, sans exposer la mécanique interne (détection, remédiation...).
-const CRITICAL = ["auth", "payment-api", "waf"];
 const FAILURE_WINDOW_MS = 15000; // une erreur récente du client = service perturbé
 const RECOVERED_MS = 20000; // durée d'affichage de "service rétabli"
 
@@ -18,8 +17,7 @@ export function useServiceStatus(lastFailureAt) {
     const poll = async () => {
       let ok;
       try {
-        const services = (await getOverview()).services || {};
-        ok = CRITICAL.every((name) => services[name] !== false);
+        ok = (await getStatus()).ok !== false;
       } catch {
         ok = false;
       }

@@ -61,4 +61,8 @@ export const getTransactions = (token) => request("/api/transactions?limit=30", 
 export const createTransaction = (token, payload) =>
   request("/api/transactions", { token, method: "POST", body: payload });
 
-export const getOverview = () => request("/supervision/overview");
+// Public : ok / perturbé, pour la pastille de l'espace client.
+export const getStatus = () => request("/supervision/status");
+
+// Réservé aux rôles operator et admin (vue détaillée de la supervision).
+export const getOverview = (token) => request("/supervision/overview", { token });

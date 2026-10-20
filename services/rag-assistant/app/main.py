@@ -48,7 +48,7 @@ def _build_retriever():
     (ex. "réaction à un DoS" ramenait les risques résiduels, pas le playbook).
     Les 3 leviers ci-dessous portent le score à 4/4 sur les questions documentées.
     """
-    from langchain.retrievers import EnsembleRetriever
+    from langchain_classic.retrievers import EnsembleRetriever
     from langchain_community.document_loaders import DirectoryLoader, TextLoader
     from langchain_community.retrievers import BM25Retriever
     from langchain_community.vectorstores import FAISS
