@@ -5,6 +5,12 @@
 limit_req_zone $binary_remote_addr zone=perip:10m rate=50r/s;
 limit_req_status 429;
 
+# Résolution DNS à chaque requête : un service recréé change d'IP. Avec un nom
+# fixe dans proxy_pass, nginx le résolvait une seule fois au démarrage et
+# renvoyait ensuite 502, ou 404 si l'ancienne IP avait été réattribuée à un
+# autre conteneur. Le `resolver` (DNS Docker 127.0.0.11) est déjà déclaré par
+# l'image CRS (nginx.conf, RESOLVERS) : ne pas le redéclarer (doublon = emerg).
+
 server {
     listen 8080;
     server_name _;
@@ -35,9 +41,18 @@ server {
     # Taille de corps bornée (anti-abus).
     client_max_body_size 256k;
 
+    # Upstreams en variables : seule façon de forcer la résolution via
+    # `resolver`. Contrepartie : proxy_pass ne retire plus le préfixe de
+    # location, d'où les `rewrite ... break` ci-dessous.
+    set $up_auth ${BACKEND_AUTH};
+    set $up_api ${BACKEND_API};
+    set $up_bff ${BACKEND_BFF};
+    set $up_front ${BACKEND_FRONTEND};
+
     location /auth/ {
         limit_req zone=perip burst=20 nodelay;
-        proxy_pass http://${BACKEND_AUTH}/;
+        rewrite ^/auth/(.*)$ /$1 break;
+        proxy_pass http://$up_auth;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -46,7 +61,8 @@ server {
 
     location /api/ {
         limit_req zone=perip burst=20 nodelay;
-        proxy_pass http://${BACKEND_API}/;
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://$up_api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -59,7 +75,7 @@ server {
     # Page /supervision (React) vs API /supervision/... (BFF). Correspondances
     # exactes : sans elles, nginx redirigerait /supervision vers l'API.
     location = /supervision {
-        proxy_pass http://${BACKEND_FRONTEND};
+        proxy_pass http://$up_front;
         proxy_set_header Host $host;
     }
     location = /supervision/ {
@@ -70,13 +86,14 @@ server {
     # Supervision (lecture seule) pour le dashboard React.
     location /supervision/ {
         limit_req zone=perip burst=30 nodelay;
-        proxy_pass http://${BACKEND_BFF}/;
+        rewrite ^/supervision/(.*)$ /$1 break;
+        proxy_pass http://$up_bff;
         proxy_set_header Host $host;
         proxy_read_timeout 10s;
     }
 
     location / {
-        proxy_pass http://${BACKEND_FRONTEND}/;
+        proxy_pass http://$up_front;
         proxy_set_header Host $host;
     }
 
