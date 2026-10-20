@@ -1,0 +1,13 @@
+# Surcharge GPU (NVIDIA) pour Ollama. Ajoutée automatiquement par
+# scripts/up-ai.sh (et Ansible) quand Docker peut utiliser le GPU ; sinon
+# Ollama reste sur CPU. Ne pas l'ajouter à la main sur une machine sans GPU :
+# la réservation d'un GPU absent fait échouer `up`.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -15,8 +15,8 @@ env: ## Crée .env depuis le modèle (démo) si absent
 up: env ## Démarre le cœur de la plateforme (build)
 	docker compose up -d --build
 
-up-ai: env ## Démarre cœur + assistant IA (Ollama + RAG)
-	docker compose --profile ai up -d --build
+up-ai: env ## Démarre cœur + assistant IA (Ollama sur GPU si dispo, sinon CPU)
+	bash scripts/up-ai.sh
 
 down: ## Arrête la plateforme
 	docker compose down

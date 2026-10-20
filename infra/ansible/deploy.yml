@@ -32,9 +32,23 @@
         state: present
       when: not with_ai
 
+    # Ollama sur GPU NVIDIA si Docker peut l'utiliser, sinon CPU (même test
+    # que scripts/up-ai.sh : réserver un GPU absent ferait échouer le compose).
+    - name: Détecter un GPU utilisable par Docker
+      ansible.builtin.shell: >-
+        docker run --rm --gpus all --entrypoint true
+        "$(grep -oE 'ollama/ollama:[^[:space:]]+' docker-compose.yml)"
+      args:
+        chdir: "{{ project_root }}"
+      register: gpu_probe
+      changed_when: false
+      failed_when: false
+      when: with_ai
+
     - name: Construire et démarrer la plateforme (cœur + IA)
       community.docker.docker_compose_v2:
         project_src: "{{ project_root }}"
+        files: "{{ ['docker-compose.yml'] + (['docker-compose.gpu.yml'] if gpu_probe.rc == 0 else []) }}"
         build: always
         state: present
         profiles: ["ai"]
