@@ -1,8 +1,8 @@
-fastapi==0.115.0
+fastapi==0.150.0
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
-langchain==0.3.30
-langchain-community==0.3.27
-langchain-ollama==0.2.0
+langchain-classic==1.0.8
+langchain-community==0.4.2
+langchain-ollama==1.1.0
 faiss-cpu==1.9.0.post1
 rank-bm25==0.2.2
