@@ -93,6 +93,7 @@ def receive_incident(
         "service": incident.service,
         "source_ip": incident.source_ip,
         "anomaly_score": incident.anomaly_score,
+        "detail": incident.detail,  # causes de l'anomalie (features du modèle)
         "steps": result.steps,
         "recovered": result.recovered,
         "contained": result.contained,

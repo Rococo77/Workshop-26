@@ -56,6 +56,17 @@ server {
     # L'endpoint interne /internal ne doit JAMAIS être exposé via le WAF.
     location /api/internal/ { return 404; }
 
+    # Page /supervision (React) vs API /supervision/... (BFF). Correspondances
+    # exactes : sans elles, nginx redirigerait /supervision vers l'API.
+    location = /supervision {
+        proxy_pass http://${BACKEND_FRONTEND};
+        proxy_set_header Host $host;
+    }
+    location = /supervision/ {
+        absolute_redirect off;
+        return 302 /supervision;
+    }
+
     # Supervision (lecture seule) pour le dashboard React.
     location /supervision/ {
         limit_req zone=perip burst=30 nodelay;

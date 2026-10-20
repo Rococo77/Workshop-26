@@ -48,6 +48,21 @@ def _services_up(client: httpx.Client) -> dict[str, bool]:
     return out
 
 
+def _alerts(client: httpx.Client) -> list[dict]:
+    """Alertes Prometheus en cours (pending/firing), réduites à l'utile."""
+    data = _get_json(client, f"{PROMETHEUS_URL}/api/v1/alerts", {"data": {"alerts": []}})
+    return [
+        {
+            "name": a.get("labels", {}).get("alertname", "?"),
+            "severity": a.get("labels", {}).get("severity", "info"),
+            "summary": a.get("annotations", {}).get("summary", ""),
+            "state": a.get("state", ""),
+            "since": a.get("activeAt"),
+        }
+        for a in data.get("data", {}).get("alerts", [])
+    ]
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -55,15 +70,17 @@ def health() -> dict[str, str]:
 
 @app.get("/overview")
 def overview() -> dict:
-    """Vue consolidée : services, détection, remédiation."""
+    """Vue consolidée : services, détection, alertes, remédiation."""
     with httpx.Client(timeout=5) as client:
         services = _services_up(client)
         detector = _get_json(client, f"{DETECTOR_URL}/state", {})
+        alerts = _alerts(client)
         remediation = _get_json(
             client, f"{REMEDIATION_URL}/status", {"events": [], "blocked_ips": []}
         )
     return {
         "services": services,
         "detector": detector,
+        "alerts": alerts,
         "remediation": remediation,
     }

@@ -5,11 +5,16 @@ import Guilloche from "./components/Guilloche.jsx";
 import History from "./components/History.jsx";
 import TransferForm from "./components/TransferForm.jsx";
 import { StatusBanner, StatusPill, useServiceStatus } from "./components/ServiceStatus.jsx";
+import Supervision from "./Supervision.jsx";
 
 // Erreurs révélatrices d'un incident (réseau, rate-limit, indisponibilité).
 const INCIDENT_STATUSES = new Set([0, 429, 502, 503, 504]);
 
 export default function App() {
+  return window.location.pathname === "/supervision" ? <Supervision /> : <ClientApp />;
+}
+
+function ClientApp() {
   const [session, setSession] = useState(null);
   return session ? (
     <Banking session={session} onLogout={() => setSession(null)} />
