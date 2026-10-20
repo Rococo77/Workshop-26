@@ -328,9 +328,12 @@ services:
     volumes:
       - ./docs:/app/corpus:ro
     ports:
-      # Console assistant pour les opérateurs (local au PC Hôte, non pédagogique).
-      - "${EDGE_BIND:-127.0.0.1}:8200:8200"
-    networks: [app]
+      # Console assistant pour les opérateurs : TOUJOURS locale au PC Hôte
+      # (sans authentification -> jamais sur EDGE_BIND / le réseau pédagogique).
+      - "127.0.0.1:8200:8200"
+    # `obs` (non interne) : Docker ne publie aucun port d'un conteneur
+    # rattaché uniquement à des réseaux internes (`app`).
+    networks: [app, obs]
     profiles: ["ai"]
     logging: *default-logging
     labels:
