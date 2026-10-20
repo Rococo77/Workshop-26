@@ -60,7 +60,7 @@ Attaque (PC Attaquant) ─▶ WAF ─▶ API/Auth ─▶ PostgreSQL
 
 | Domaine | Composants |
 |---|---|
-| Développement | `payment-api`, `auth`, `frontend` (React/Tailwind), `supervision-bff` |
+| Développement | `payment-api`, `auth`, `frontend` (React/Tailwind), `supervision-bff`, `face-api` (DeepFace : validation faciale des virements) |
 | Infrastructure | Docker Compose, Ansible, Prometheus/Grafana/Loki/Promtail |
 | IA / Data | `ml-detector` (IsolationForest), `rag-assistant` (Ollama + LangChain) |
 | Cybersécurité | WAF ModSecurity + OWASP CRS, SIEM (Loki), secrets SOPS/age |
@@ -69,7 +69,7 @@ Attaque (PC Attaquant) ─▶ WAF ─▶ API/Auth ─▶ PostgreSQL
 ## Arborescence
 
 ```
-services/            microservices (API, auth, front, détection, remédiation, BFF, RAG)
+services/            microservices (API, auth, front, détection, remédiation, BFF, RAG, face-api)
 infra/               WAF, observabilité (Prometheus/Grafana/Loki/Promtail), Ansible
 attack/              scripts Red Team (flood, sqli, exfil)
 ml/                  entraînement & évaluation du modèle de détection
