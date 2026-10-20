@@ -1,0 +1,111 @@
+---
+# ============================================================================
+#  Durcissement & vérification de posture (sujet §3.4).
+#  Le durcissement des conteneurs est DÉCLARATIF (docker-compose.yml :
+#  no-new-privileges, cap_drop ALL, read_only, non-root — voir
+#  docs/durcissement.md). Ce playbook le VÉRIFIE (il échoue si quelqu'un l'a
+#  retiré), contrôle l'hygiène des secrets et l'exposition réseau, et peut
+#  poser les règles de pare-feu du PC Hôte pour la démo.
+#
+#  Usage :
+#    ansible-playbook harden.yml                         # vérifications
+#    ansible-playbook harden.yml -e configure_firewall=true   # + pare-feu Windows
+# ============================================================================
+- name: Vérification de la posture de sécurité
+  hosts: host
+  gather_facts: false
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    configure_firewall: false
+    # Réseau du groupe autorisé à joindre le point d'entrée (sujet §4).
+    group_subnet: "192.168.137.0/24"
+
+  tasks:
+    # --- 1. Durcissement déclaratif présent dans le compose ------------------
+    - name: Lire docker-compose.yml
+      ansible.builtin.slurp:
+        path: "{{ project_root }}/docker-compose.yml"
+      register: compose_raw
+
+    - name: Le socle de durcissement est présent (no-new-privileges + cap_drop)
+      ansible.builtin.assert:
+        that:
+          - "'no-new-privileges' in (compose_raw.content | b64decode)"
+          - "'cap_drop' in (compose_raw.content | b64decode)"
+          - "'read_only' in (compose_raw.content | b64decode)"
+        fail_msg: >-
+          Le durcissement a été retiré du docker-compose.yml. Restaurer
+          no-new-privileges / cap_drop / read_only (voir docs/durcissement.md).
+        success_msg: "Durcissement déclaratif présent."
+
+    - name: Le moteur de remédiation ne monte plus le socket Docker brut
+      ansible.builtin.assert:
+        that:
+          # La remédiation passe par docker-socket-proxy (DOCKER_HOST=tcp://...).
+          - "'docker-socket-proxy' in (compose_raw.content | b64decode)"
+        fail_msg: "Le proxy socket Docker a disparu : surface critique ré-ouverte."
+        success_msg: "Moteur de remédiation confiné derrière le proxy."
+
+    # --- 2. Hygiène des secrets (aucun secret en clair versionné) ------------
+    - name: .env est bien ignoré par git
+      ansible.builtin.command: git check-ignore .env
+      args:
+        chdir: "{{ project_root }}"
+      changed_when: false
+      register: ignored
+      failed_when: ignored.rc != 0
+
+    - name: Aucun .env n'est suivi par git
+      ansible.builtin.command: git ls-files --error-unmatch .env
+      args:
+        chdir: "{{ project_root }}"
+      changed_when: false
+      register: tracked
+      failed_when: tracked.rc == 0  # rc==0 => le fichier EST suivi => échec
+
+    # --- 3. Exposition réseau minimale (seuls WAF + Grafana publiés) ---------
+    - name: Lister les conteneurs qui publient un port
+      ansible.builtin.shell: >-
+        docker ps --format '{% raw %}{{.Names}} {{.Ports}}{% endraw %}'
+        | grep -E '0.0.0.0|:::|127.0.0.1' || true
+      args:
+        chdir: "{{ project_root }}"
+      changed_when: false
+      register: published
+
+    - name: Aucun service interne (DB, control, obs) n'est publié
+      ansible.builtin.assert:
+        that:
+          - "'ra-postgres' not in published.stdout"
+          - "'ra-remediation' not in published.stdout"
+          - "'ra-docker-proxy' not in published.stdout"
+          - "'ra-ml-detector' not in published.stdout"
+        fail_msg: "Un service interne est exposé ! Vérifier les 'ports:' du compose."
+        success_msg: "Exposition réseau conforme (seuls WAF + Grafana publiés)."
+
+    - name: Rappel de la surface publiée
+      ansible.builtin.debug:
+        msg: "{{ published.stdout_lines }}"
+
+    # --- 4. Pare-feu du PC Hôte (optionnel, Windows via powershell.exe) -------
+    #  Restreint l'accès au point d'entrée au seul réseau du groupe. Best-effort :
+    #  n'échoue pas si powershell.exe est indisponible (ex. hôte Linux).
+    - name: Restreindre le point d'entrée au réseau du groupe (pare-feu Windows)
+      ansible.builtin.command: >-
+        powershell.exe -NoProfile -Command
+        "New-NetFirewallRule -DisplayName 'RESILIENCE-ALPHA edge {{ item }}'
+        -Direction Inbound -Action Allow -Protocol TCP -LocalPort {{ item }}
+        -RemoteAddress {{ group_subnet }} -ErrorAction SilentlyContinue"
+      loop: [8080, 3000]
+      register: fw
+      changed_when: fw.rc == 0
+      failed_when: false
+      when: configure_firewall | bool
+
+    - name: Note pare-feu
+      ansible.builtin.debug:
+        msg: >-
+          Pare-feu non configuré (configure_firewall=false). Pour restreindre le
+          point d'entrée au seul {{ group_subnet }}, relancer avec
+          -e configure_firewall=true (PC Hôte Windows, droits admin).
+      when: not (configure_firewall | bool)

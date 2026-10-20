@@ -32,9 +32,20 @@ Make n'est pas installé par défaut sous Windows : utiliser l'option A dans ce 
 ### Option C — Ansible (reproductible, nécessite WSL sous Windows)
 ```bash
 cd infra/ansible
-ansible-playbook deploy.yml                  # cœur
-ansible-playbook deploy.yml -e with_ai=true  # + IA (pull des modèles Ollama)
+# Point d'entrée unique : prérequis -> déploiement -> vérifs de posture
+ansible-playbook site.yml                    # cœur + vérifications
+ansible-playbook site.yml -e with_ai=true    # + IA (pull des modèles Ollama)
+ansible-playbook site.yml -e configure_firewall=true  # + pare-feu hôte (démo)
+
+# Playbooks autonomes (hors chaîne nominale) :
+ansible-playbook preflight.yml   # prérequis seuls (docker, compose, sops, env)
+ansible-playbook deploy.yml      # déploiement seul
+ansible-playbook harden.yml      # vérifie durcissement + secrets + exposition
+ansible-playbook ops.yml -e action=status    # opérations (status/restart_api/backup_db)
 ```
+`site.yml` est le plan d'orchestration **Day-0/1** (déploiement/exploitation),
+**distinct** de la reprise autonome **Day-2** (moteur de remédiation). Ansible
+n'est jamais dans la boucle de reprise live.
 
 ## 3. Secrets
 
@@ -123,7 +134,22 @@ docker exec ra-postgres psql -U payuser -d paymentdb -c \
   "DELETE FROM face_enrollment WHERE user_id = (SELECT id FROM app_user WHERE username = 'alice')"
 ```
 
-## 8. Arrêt / remise à zéro
+## 8. Sauvegarde & restauration (PCA/PRA)
+
+```bash
+cd infra/ansible
+ansible-playbook backup.yml                     # dump horodaté -> backups/ (rétention 7)
+ansible-playbook backup.yml -e retention=10
+
+# Restauration PRA : restaure PUIS vérifie le service par le canari (/api/ready).
+ansible-playbook restore.yml -e confirm=yes     # dernière sauvegarde par défaut
+ansible-playbook restore.yml -e confirm=yes -e backup_file=backups/paymentdb_AAAAMMJJ_HHMMSS.sql
+```
+Une sauvegarde n'a de valeur que si la restauration est **prouvée** : `restore.yml`
+échoue si `/api/ready` ne repasse pas à 200 après restauration. Les fichiers
+`backups/*.sql` ne sont pas versionnés (cf. `.gitignore`).
+
+## 9. Arrêt / remise à zéro
 
 ```bash
 docker compose --profile ai down      # arrêt

@@ -43,3 +43,11 @@ infra/loki/data/
 services/face-api/*.jpg
 services/face-api/*.jpeg
 services/face-api/*.png
+
+# Fichiers .MD
+CLAUDE.md 
+SUJET.md 
+
+
+# Sauvegardes PRA locales (jamais versionnées)
+backups/
