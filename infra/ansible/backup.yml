@@ -17,9 +17,14 @@
     backup_dir: "{{ project_root }}/backups"
     retention: 7            # nombre de sauvegardes conservées
     pg_container: ra-postgres
-    ts: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
   tasks:
+    # Horodatage figé UNE fois : un lookup en `vars:` serait réévalué à chaque
+    # usage (la seconde peut changer entre l'écriture et le contrôle du fichier).
+    - name: Figer l'horodatage de la sauvegarde
+      ansible.builtin.set_fact:
+        ts: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+
     - name: Créer le dossier de sauvegardes
       ansible.builtin.file:
         path: "{{ backup_dir }}"
@@ -50,7 +55,7 @@
       ansible.builtin.assert:
         that:
           - dump.stat.exists
-          - dump.stat.size > 0
+          - dump.stat.size | default(0) | int > 0
         fail_msg: "La sauvegarde est vide — vérifier les logs de {{ pg_container }}."
         success_msg: "Sauvegarde OK ({{ dump.stat.size }} octets)."
 
