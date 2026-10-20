@@ -93,6 +93,7 @@ Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
 ## Documentation
 
 - [Architecture & chaîne de résilience](docs/architecture.md)
+- [Durcissement & moindre privilège des conteneurs](docs/durcissement.md)
 - [Runbook (déploiement, vérification, démo)](docs/runbook.md)
 - [Analyse de risques EBIOS RM](docs/ebios-rm.md)
 - [PCA / PRA](docs/pca-pra.md)
