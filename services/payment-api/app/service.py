@@ -78,6 +78,30 @@ def _new_reference() -> str:
     return f"TX-{uuid.uuid4().hex[:12]}"
 
 
+CANARY_USERS = ("_canary_src", "_canary_dst")
+
+
+def canary_route() -> tuple[str, int, int]:
+    """(propriétaire source, compte source, compte destination) du canari.
+
+    Comptes retrouvés par utilisateur (et non par id en dur : sur une base
+    existante, les ids 1/2 appartiennent à d'autres clients). La source est le
+    compte le mieux approvisionné : le canari fait l'aller-retour et ne vide
+    jamais un compte, quel que soit le nombre de vérifications de reprise."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT u.username, a.id, a.balance FROM account a "
+            "JOIN app_user u ON u.id = a.owner_id "
+            "WHERE u.username = ANY(%s) ORDER BY a.balance DESC, a.id",
+            (list(CANARY_USERS),),
+        ).fetchall()
+    by_user = {r["username"]: r for r in reversed(rows)}  # un compte par utilisateur
+    if len(by_user) != len(CANARY_USERS):
+        raise LookupError("comptes canari absents (migration 06_canary_accounts.sql)")
+    src, dst = sorted(by_user.values(), key=lambda r: r["balance"], reverse=True)
+    return src["username"], src["id"], dst["id"]
+
+
 def transfer(
     *, username: str, src_account: int, dst_account: int, amount: Decimal, is_canary: bool = False
 ) -> dict:

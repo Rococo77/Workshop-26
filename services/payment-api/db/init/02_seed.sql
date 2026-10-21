@@ -13,8 +13,8 @@
 --  Comptes canari (_canary_src / _canary_dst) : verrouillés (`locked`),
 --  mot de passe aléatoire jamais révélé -> connexion impossible. Utilisés
 --  uniquement par /internal/canary (remediation-engine), jamais par un
---  humain. Semés EN PREMIER pour garantir les ids 1/2 attendus par
---  `CANARY_SRC`/`CANARY_DST` dans payment-api/app/main.py.
+--  humain. Retrouvés par nom d'utilisateur (service.canary_route), pas par
+--  id ; sur une base existante, voir 06_canary_accounts.sql.
 -- ============================================================================
 
 INSERT INTO app_user (username, password_hash, role, locked) VALUES
