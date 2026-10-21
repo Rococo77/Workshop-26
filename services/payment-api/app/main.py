@@ -52,9 +52,8 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="Resilience-Alpha Payment API", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(MetricsMiddleware)
 
-# Comptes canari (seed, verrouillés, jamais connectés) : _canary_src(1) ->
-# _canary_dst(2), montant symbolique.
-CANARY_SRC, CANARY_DST, CANARY_USER = 1, 2, "_canary_src"
+# Comptes canari : utilisateurs verrouillés _canary_src / _canary_dst (seed ou
+# migration 06), jamais connectés ; voir service.canary_route().
 
 REQUIRED_POSES = face.REQUIRED_POSES
 
@@ -525,10 +524,11 @@ def canary() -> dict:
     """Transaction canari : prouve que le chemin métier complet fonctionne
     (auth implicite seed -> débit -> crédit -> écriture). Non exposé via WAF."""
     try:
+        owner, src_account, dst_account = service.canary_route()
         tx = service.transfer(
-            username=CANARY_USER,
-            src_account=CANARY_SRC,
-            dst_account=CANARY_DST,
+            username=owner,
+            src_account=src_account,
+            dst_account=dst_account,
             amount=Decimal("1.00"),
             is_canary=True,
         )
