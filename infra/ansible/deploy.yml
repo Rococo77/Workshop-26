@@ -18,12 +18,30 @@
       ansible.builtin.command: docker version
       changed_when: false
 
+    - name: Détecter des secrets chiffrés (SOPS)
+      ansible.builtin.stat:
+        path: "{{ project_root }}/secrets.enc.env"
+      register: enc_secrets
+
+    - name: Vérifier qu'un .env est présent (voie démo locale, sans SOPS)
+      ansible.builtin.stat:
+        path: "{{ project_root }}/.env"
+      register: env_present
+
     - name: Déchiffrer les secrets vers .env (SOPS/age)
       ansible.builtin.command: "bash scripts/secrets.sh decrypt"
       args:
         chdir: "{{ project_root }}"
       changed_when: true
-      # Si SOPS n'est pas utilisé, copier manuellement .env.example -> .env.
+      # Uniquement si des secrets chiffrés existent. Sinon, on s'appuie sur le
+      # .env déjà présent (voie démo locale) -> pas de dépendance à sops.
+      when: enc_secrets.stat.exists
+
+    - name: Refuser de continuer sans secrets ni .env
+      ansible.builtin.assert:
+        that:
+          - enc_secrets.stat.exists or env_present.stat.exists
+        fail_msg: "Ni secrets.enc.env ni .env : copier .env.example -> .env."
 
     - name: Construire et démarrer la plateforme (cœur)
       community.docker.docker_compose_v2:

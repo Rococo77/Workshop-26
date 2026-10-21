@@ -38,9 +38,12 @@
 
     # Les identifiants viennent des variables d'environnement DU conteneur :
     # aucun secret ne transite par la ligne de commande Ansible.
-    - name: Dump logique horodaté
+    # --clean --if-exists : le dump porte les `DROP ... IF EXISTS` avant les
+    # `CREATE`, donc il est REJOUABLE sur une base déjà peuplée (restauration PRA
+    # idempotente, sans "relation already exists").
+    - name: Dump logique horodaté (rejouable)
       ansible.builtin.shell: >-
-        docker exec {{ pg_container }} sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"'
+        docker exec {{ pg_container }} sh -c 'pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"'
         > "{{ backup_dir }}/paymentdb_{{ ts }}.sql"
       args:
         chdir: "{{ project_root }}"

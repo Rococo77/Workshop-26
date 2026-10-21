@@ -52,6 +52,15 @@ Resources → WSL Integration, ou `integratedWslDistros: ["UbuntuRA"]` dans
 >   | sudo tee /etc/profile.d/docker-host.sh
 > ```
 
+> ⚠️ **`deploy.yml`/`site.yml` depuis WSL : placer le dépôt dans le système de
+> fichiers natif de la distro** (`~/Workshop-26`, pas `/mnt/c/...`). Depuis
+> `/mnt/c`, `docker compose` résout les *bind-mounts de fichiers* (ex.
+> `prometheus.yml`) en chemins `/mnt/c/...` que le moteur Docker Desktop ne sait
+> pas monter → `error mounting ... to rootfs`. Les playbooks sans bind-mount
+> (`preflight`, `harden`, `backup`, `restore`, `ops`) fonctionnent depuis
+> `/mnt/c`. Alternative pour déployer : `docker compose` côté **PowerShell**
+> (Option A), qui gère les chemins `C:\` correctement.
+
 **Lancement des playbooks** (le dépôt est vu sous `/mnt/c/...` ; `ansible.cfg`
 étant sur un montage *world-writable*, passer l'inventaire avec `-i`) :
 ```bash
