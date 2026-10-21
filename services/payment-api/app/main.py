@@ -1,7 +1,9 @@
 """API métier de paiement (fictif).
 
-Endpoints publics (via WAF) : /health, /accounts/me, /transactions,
-/face/enrollment et /transactions/{id}/confirm|cancel (validation faciale).
+Endpoints publics (via WAF) : /health, /auth/register, /auth/login/face,
+/accounts/me, /transactions, /face/enrollment et
+/transactions/{id}/confirm|cancel (validation faciale), /ws/face-events
+(relais temps réel vers l'indicateur LED ESP8266, voir firmware/face-led/).
 Endpoint interne (non exposé au réseau pédagogique) : /internal/canary,
 utilisé par le moteur de remédiation pour prouver le retour à un état
 utilisable (transaction canari réelle en base).
@@ -9,28 +11,52 @@ utilisable (transaction canari réelle en base).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
-from . import biometrics, db, face, service
-from .auth import Principal, current_customer
+from . import accounts, biometrics, db, events, face, service
+from .auth import Principal, create_access_token, current_customer, current_pending_face
 from .config import settings
 from .metrics import FACE_LATENCY, FACE_VERIFICATIONS, PAYMENT_TX, MetricsMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("payment-api")
 
-app = FastAPI(title="Resilience-Alpha Payment API", version="1.0.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    task = asyncio.create_task(events.broadcast_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(title="Resilience-Alpha Payment API", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(MetricsMiddleware)
 
-# Comptes canari (seed) : alice(1) -> bob(2), montant symbolique.
-CANARY_SRC, CANARY_DST, CANARY_USER = 1, 2, "alice"
+# Comptes canari (seed, verrouillés, jamais connectés) : _canary_src(1) ->
+# _canary_dst(2), montant symbolique.
+CANARY_SRC, CANARY_DST, CANARY_USER = 1, 2, "_canary_src"
+
+REQUIRED_POSES = face.REQUIRED_POSES
 
 
 class TransferRequest(BaseModel):
@@ -46,9 +72,41 @@ class FaceImage(BaseModel):
     image: str = Field(min_length=16, max_length=face.MAX_IMAGE_B64_CHARS * 2)
 
 
+class PoseImages(BaseModel):
+    # Une photo par pose (clés = REQUIRED_POSES, vérifié par _validate_pool).
+    images: dict[str, str]
+
+
+class RegisterRequest(PoseImages):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=1, max_length=256)
+    # Consentement explicite au traitement de la donnée biométrique (RGPD
+    # art. 9) : obligatoire, affiché par le front avant toute capture photo.
+    consent: bool = False
+
+
 def _face_error(status_code: int, code: str, **extra) -> HTTPException:
     # `detail` structuré : le front affiche un message selon `code`.
     return HTTPException(status_code, {"code": code, **extra})
+
+
+def _validate_pool(images: dict[str, str]) -> None:
+    if set(images.keys()) != set(REQUIRED_POSES):
+        raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "incomplete_pool")
+
+
+def _embed_pool(images: dict[str, str], purpose: str) -> dict[str, list[float]]:
+    """Empreinte de chaque pose, dans un ordre déterministe. Fail-fast : la
+    première photo inexploitable arrête tout (aucune écriture partielle),
+    l'erreur indique la pose en cause pour que le front ne fasse reprendre
+    que celle-là."""
+    embeddings: dict[str, list[float]] = {}
+    for pose in REQUIRED_POSES:
+        try:
+            embeddings[pose] = _embed(images[pose], purpose)
+        except face.FaceRejected as exc:
+            raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code, pose=pose) from exc
+    return embeddings
 
 
 def _embed(image: str, purpose: str) -> list[float]:
@@ -88,6 +146,116 @@ def ready() -> dict[str, str]:
 @app.get("/metrics")
 def metrics() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.websocket("/ws/face-events")
+async def face_events(websocket: WebSocket) -> None:
+    """Relais temps réel des vérifications faciales (login, confirmation de
+    virement) vers un client WebSocket (indicateur LED ESP8266). Jeton
+    partagé requis (même principe que FACE_API_TOKEN), l'ESP n'envoie rien :
+    la boucle de réception ne sert qu'à détecter sa déconnexion."""
+    if websocket.headers.get("authorization") != f"Bearer {settings.esp_events_token}":
+        await websocket.close(code=4401)
+        return
+    await websocket.accept()
+    events.register(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        events.unregister(websocket)
+
+
+@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
+def register(req: RegisterRequest) -> dict:
+    """Auto-inscription : mot de passe + pool de 5 photos (une par pose) en
+    un seul appel. Reprend l'ordre de l'outil opérateur (`enroll_cli`) : les
+    empreintes sont calculées AVANT de créer le compte, pour ne rien
+    persister si une seule photo est inexploitable."""
+    if not req.consent:
+        raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "consent_required")
+    try:
+        accounts.validate_username(req.username)
+        accounts.validate_password(req.password)
+    except accounts.AccountError as exc:
+        raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
+    _validate_pool(req.images)
+
+    # Pas d'audit `log_attempt` ici : le compte n'existe pas encore (rien à
+    # rattacher), et une photo inexploitable ne doit créer ni client ni trace.
+    embeddings = _embed_pool(req.images, "enroll")
+
+    try:
+        accounts.create_customer(
+            req.username,
+            req.password,
+            accounts.next_iban(),
+            settings.registration_starting_balance,
+            consent_at=datetime.now(UTC),
+        )
+    except accounts.AccountError as exc:
+        raise _face_error(status.HTTP_409_CONFLICT, exc.code) from exc
+
+    biometrics.save_enrollment(req.username, settings.face_model, embeddings)
+    biometrics.log_attempt(req.username, purpose="enroll", result="enrolled", distance=None)
+    FACE_VERIFICATIONS.labels(purpose="enroll", result="enrolled").inc()
+    log.info("customer registered username=%s", req.username)
+
+    token = create_access_token(subject=req.username, role="customer")
+    return {"access_token": token, "token_type": "bearer", "role": "customer"}
+
+
+@app.post("/auth/login/face")
+def login_face(req: FaceImage, principal: Principal = Depends(current_pending_face)) -> dict:
+    """Second facteur de connexion : le mot de passe a déjà été vérifié par
+    le service auth, qui a émis un jeton `face_pending` de courte durée.
+    Même logique anti-force-brute / anti-spoof que la confirmation de
+    virement, compteur d'échecs indépendant (purpose='login')."""
+    user = principal.username
+    if biometrics.recent_failures(user, settings.face_lockout_minutes, purpose="login") >= (
+        settings.face_lockout_failures
+    ):
+        log.warning("face login lockout user=%s", user)
+        raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "face_locked")
+
+    enrollment = biometrics.get_enrollment(user)
+    if enrollment is None:
+        raise _face_error(status.HTTP_403_FORBIDDEN, "face_not_enrolled")
+    if enrollment["model_name"] != settings.face_model:
+        raise _face_error(status.HTTP_409_CONFLICT, "face_reenrollment_required")
+
+    distance: float | None = None
+    try:
+        probe = _embed(req.image, "login")
+        distance = face.best_distance(probe, list(enrollment["poses"].values()))
+        result = "match" if face.is_match(distance) else "mismatch"
+    except face.FaceRejected as exc:
+        if exc.code != "spoof":
+            raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
+        result = "spoof"
+
+    biometrics.log_attempt(user, purpose="login", result=result, distance=distance)
+    log.info(
+        "face login user=%s result=%s distance=%s",
+        user,
+        result,
+        f"{distance:.4f}" if distance is not None else "-",
+    )
+    events.publish({"ok": result == "match", "purpose": "login"})
+
+    if result != "match":
+        FACE_VERIFICATIONS.labels(purpose="login", result=result).inc()
+        left = settings.face_lockout_failures - biometrics.recent_failures(
+            user, settings.face_lockout_minutes, purpose="login"
+        )
+        code = "spoof" if result == "spoof" else "face_mismatch"
+        raise _face_error(status.HTTP_403_FORBIDDEN, code, attempts_left=max(0, left))
+
+    FACE_VERIFICATIONS.labels(purpose="login", result="match").inc()
+    token = create_access_token(subject=user, role=principal.role)
+    return {"access_token": token, "token_type": "bearer", "role": principal.role}
 
 
 @app.get("/accounts/me")
@@ -218,7 +386,7 @@ def confirm_transaction(
     distance: float | None = None
     try:
         probe = _embed(req.image, "confirm")
-        distance = face.cosine_distance(enrollment["embedding"], probe)
+        distance = face.best_distance(probe, list(enrollment["poses"].values()))
         result = "match" if face.is_match(distance) else "mismatch"
     except face.FaceRejected as exc:
         if exc.code != "spoof":
@@ -235,6 +403,7 @@ def confirm_transaction(
         result,
         f"{distance:.4f}" if distance is not None else "-",
     )
+    events.publish({"ok": result == "match", "purpose": "confirm"})
 
     if result != "match":
         FACE_VERIFICATIONS.labels(purpose="confirm", result=result).inc()
@@ -290,12 +459,15 @@ def face_enrollment_status(principal: Principal = Depends(current_customer)) -> 
         "required": settings.face_confirmation_required,
         "enrolled": enrollment is not None,
         "enrolled_at": enrollment["created_at"].isoformat() if enrollment else None,
+        "poses": sorted(enrollment["poses"].keys()) if enrollment else [],
     }
 
 
 @app.post("/face/enrollment", status_code=status.HTTP_201_CREATED)
-def face_enroll(req: FaceImage, principal: Principal = Depends(current_customer)) -> dict:
-    """Enrôlement unique du visage de référence. Seul le vecteur est stocké."""
+def face_enroll(req: PoseImages, principal: Principal = Depends(current_customer)) -> dict:
+    """Enrôlement unique du pool de référence (une photo par pose). Seuls les
+    vecteurs sont stockés. Parcours de rattrapage pour un compte créé sans
+    pool complet (le consentement a déjà été donné à l'inscription)."""
     user = principal.username
     try:
         if biometrics.get_enrollment(user) is not None:
@@ -306,15 +478,10 @@ def face_enroll(req: FaceImage, principal: Principal = Depends(current_customer)
         log.error("enrollment lookup failed: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
 
-    try:
-        embedding = _embed(req.image, "enroll")
-    except face.FaceRejected as exc:
-        if exc.code == "spoof":
-            biometrics.log_attempt(user, purpose="enroll", result="spoof", distance=None)
-            log.warning("face enroll spoof user=%s", user)
-        raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
+    _validate_pool(req.images)
+    embeddings = _embed_pool(req.images, "enroll")
 
-    if not biometrics.save_enrollment(user, settings.face_model, embedding):
+    if not biometrics.save_enrollment(user, settings.face_model, embeddings):
         raise _face_error(status.HTTP_409_CONFLICT, "already_enrolled")
     biometrics.log_attempt(user, purpose="enroll", result="enrolled", distance=None)
     FACE_VERIFICATIONS.labels(purpose="enroll", result="enrolled").inc()

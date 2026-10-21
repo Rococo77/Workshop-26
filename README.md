@@ -60,22 +60,35 @@ Attaque (PC Attaquant) ─▶ WAF ─▶ API/Auth ─▶ PostgreSQL
 
 | Domaine | Composants |
 |---|---|
-| Développement | `payment-api`, `auth`, `frontend` (React/Tailwind), `supervision-bff`, `face-api` (DeepFace : validation faciale des virements) |
+| Développement | `payment-api`, `auth`, `frontend` (React/Tailwind), `supervision-bff`, `face-api` (DeepFace : auto-inscription, connexion et virements validés par visage) |
 | Infrastructure | Docker Compose, Ansible, Prometheus/Grafana/Loki/Promtail |
 | IA / Data | `ml-detector` (IsolationForest), `rag-assistant` (Ollama + LangChain) |
 | Cybersécurité | WAF ModSecurity + OWASP CRS, SIEM (Loki), secrets SOPS/age |
 | Gouvernance | EBIOS RM, PCA/PRA, NIS2/DORA (`docs/`) |
+
+### Authentification : auto-inscription et connexion à deux facteurs
+
+Aucun compte client n'est pré-créé. Chaque client s'inscrit lui-même
+(identifiant, mot de passe, consentement RGPD, **pool de 5 photos** du
+visage : droite, haut, bas, gauche, face) puis se connecte ensuite avec son
+mot de passe **et** son visage (une seule photo, comparée au pool). Détails
+et schémas : [docs/architecture.md §3.1](docs/architecture.md).
+
+Démo bonus (hors périmètre noté) : un indicateur **LED ESP8266** affiche en
+temps réel (WebSocket) le résultat de chaque vérification faciale — voir
+[firmware/face-led/](firmware/face-led/README.md).
 
 ## Arborescence
 
 ```
 services/            microservices (API, auth, front, détection, remédiation, BFF, RAG, face-api)
 infra/               WAF, observabilité (Prometheus/Grafana/Loki/Promtail), Ansible
+firmware/            démo bonus : indicateur LED ESP8266 (PlatformIO), hors périmètre noté
 attack/              scripts Red Team (flood, sqli, exfil)
 ml/                  entraînement & évaluation du modèle de détection
 docs/                architecture, EBIOS RM, PCA/PRA, NIS2/DORA, runbook
-tests/               tests (détection, garde-fous remédiation, parsing SIEM)
-scripts/             secrets (SOPS/age), orchestration de démo
+tests/               tests (auth, pool biométrique, détection, garde-fous remédiation, parsing SIEM)
+scripts/             secrets (SOPS/age), orchestration de démo, enrôlement facial opérateur
 docker-compose.yml   orchestration (réseaux segmentés)
 .github/workflows/   pipeline CI/CD (lint, tests, scan, E2E de résilience)
 Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
@@ -100,6 +113,7 @@ Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
 - [PCA / PRA](docs/pca-pra.md)
 - [Conformité NIS2 / DORA](docs/nis2-dora.md)
 - [Scripts d'attaque](attack/README.md)
+- [Indicateur LED ESP8266 (démo bonus)](firmware/face-led/README.md)
 
 ## Tests
 

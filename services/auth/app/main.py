@@ -14,7 +14,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from pydantic import BaseModel, Field
 
 from . import db
-from .security import create_access_token, verify_password
+from .security import create_access_token, create_pending_face_token, verify_password
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("auth")
@@ -36,6 +36,12 @@ class TokenResponse(BaseModel):
     role: str
 
 
+class FaceRequiredResponse(BaseModel):
+    status: str = "face_required"
+    pending_token: str
+    role: str
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -46,8 +52,13 @@ def metrics() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
-@app.post("/login", response_model=TokenResponse)
-def login(req: LoginRequest) -> TokenResponse:
+@app.post("/login")
+def login(req: LoginRequest) -> TokenResponse | FaceRequiredResponse:
+    """Mot de passe seul pour operator/admin (pas de compte bancaire, pas de
+    visage enrôlé). Pour un client (`customer`), le mot de passe n'ouvre
+    qu'un jeton intermédiaire `face_pending` : le second facteur (visage)
+    est vérifié par payment-api, seul service relié à `face-api`
+    (POST /auth/login/face), qui émet alors le jeton d'accès complet."""
     try:
         user = db.fetch_user(req.username)
     except Exception as exc:  # indisponibilité base -> 503 explicite
@@ -67,9 +78,22 @@ def login(req: LoginRequest) -> TokenResponse:
         LOGIN_FAILURES.labels(reason="locked").inc()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "account locked")
 
-    LOGIN_ATTEMPTS.labels(result="success").inc()
-    token = create_access_token(subject=user["username"], role=user["role"])
-    return TokenResponse(access_token=token, role=user["role"])
+    if user["role"] != "customer":
+        LOGIN_ATTEMPTS.labels(result="success").inc()
+        token = create_access_token(subject=user["username"], role=user["role"])
+        return TokenResponse(access_token=token, role=user["role"])
+
+    if not db.has_face_enrollment(user["username"]):
+        # Ne devrait pas arriver (l'auto-inscription enrôle le visage dans
+        # le même appel) : garde-fou, pas un cas nominal.
+        LOGIN_ATTEMPTS.labels(result="failure").inc()
+        LOGIN_FAILURES.labels(reason="face_not_enrolled").inc()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "face verification not configured")
+
+    # Mot de passe correct mais second facteur requis : pas un échec.
+    LOGIN_ATTEMPTS.labels(result="pending_face").inc()
+    pending = create_pending_face_token(subject=user["username"], role=user["role"])
+    return FaceRequiredResponse(pending_token=pending, role=user["role"])
 
 
 @app.exception_handler(Exception)

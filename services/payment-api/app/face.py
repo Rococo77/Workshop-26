@@ -22,6 +22,12 @@ from .config import settings
 MAX_IMAGE_B64_CHARS = 120_000
 _MAGIC = {b"\xff\xd8\xff": "jpeg", b"\x89PNG\r\n\x1a\n": "png"}
 
+# Pool d'empreintes par client : une pose par orientation. Une seule photo
+# prise au login/virement est ensuite comparée aux 5 (distance minimale) ->
+# reconnaissance plus tolérante à l'angle/l'éclairage. Partagé par
+# l'auto-inscription (main.py) et l'outil opérateur (enroll_cli.py).
+REQUIRED_POSES = ("right", "up", "down", "left", "face")
+
 
 class FaceRejected(Exception):
     """Image refusée : pas de visage, plusieurs visages, spoof...
@@ -100,3 +106,9 @@ def cosine_distance(a: list[float], b: list[float]) -> float:
 
 def is_match(distance: float) -> bool:
     return distance <= settings.face_match_threshold
+
+
+def best_distance(probe: list[float], candidates: list[list[float]]) -> float:
+    """Distance minimale entre une photo prise au login/virement et le pool
+    d'empreintes enrôlées (une par pose) : il suffit qu'une seule corresponde."""
+    return min(cosine_distance(probe, c) for c in candidates)
