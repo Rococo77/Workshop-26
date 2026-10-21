@@ -2,7 +2,7 @@
 #  PROJECT RESILIENCE-ALPHA — commandes d'exploitation
 # ============================================================================
 .PHONY: help env up up-ai down logs ps reset demo attack-flood attack-sqli attack-exfil \
-        train test verify enroll-face
+        train test verify enroll-face flash-esp
 
 TARGET ?= http://127.0.0.1:8080
 
@@ -37,6 +37,9 @@ print(urllib.request.urlopen(urllib.request.Request('http://localhost:8000/inter
 
 demo: ## Joue la démonstration complète
 	bash scripts/demo.sh $(TARGET)
+
+flash-esp: ## Configure (depuis .env), compile et flashe l'ESP8266 LED (Windows, carte USB branchée)
+	bash scripts/flash-esp.sh
 
 attack-flood: ## Flood HTTP (déni de service)
 	python3 attack/flood.py --target $(TARGET) --duration 40 --workers 50
