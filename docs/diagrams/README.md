@@ -14,6 +14,11 @@ ouverture).
 | [Authentification](authentification.drawio) | inscription (pool de 5 empreintes) · connexion mot de passe + visage · virement validé par le visage | [draw.io](https://app.diagrams.net/#HRococo77%2FWorkshop-26%2Fdev%2Fdocs%2Fdiagrams%2Fauthentification.drawio) |
 | [Secrets et déploiement](secrets-deploiement.drawio) | Vault · chaîne Ansible (site.yml, sauvegarde, restauration) · pipeline CI/CD | [draw.io](https://app.diagrams.net/#HRococo77%2FWorkshop-26%2Fdev%2Fdocs%2Fdiagrams%2Fsecrets-deploiement.drawio) |
 
+Exports PNG (dossier, slides) : [`png/`](png/), un fichier par page
+(`<schéma>-<n° de page>.png`). Régénérer après modification :
+`draw.io.exe -x -f png -s 1.5 -b 20 -p <page> -o png/<schéma>-<page>.png <schéma>.drawio`
+(draw.io desktop, `-p` commence à 1).
+
 Documents qui s'appuient sur ces schémas : [architecture](../architecture.md),
 [Vault](../vault.md), [Ansible](../ansible.md), [CI/CD](../CICD.md),
 [runbook](../runbook.md).
