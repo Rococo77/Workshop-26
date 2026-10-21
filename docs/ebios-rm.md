@@ -16,7 +16,7 @@
 
 ### Biens supports
 API métier (`payment-api`), service `auth`, PostgreSQL, WAF, chaîne
-d'observabilité, moteur de remédiation, socket Docker, secrets (SOPS/age),
+d'observabilité, moteur de remédiation, socket Docker, secrets (HashiCorp Vault),
 réseau du consortium.
 
 ### Événements redoutés
@@ -69,7 +69,7 @@ Couples SR/OV prioritaires retenus : **SR1→ER1** (DoS), **SR2→ER2/ER3**
 
 ### Mesures transverses
 - Moindre privilège (utilisateurs non-root dans les conteneurs, allowlists).
-- Secrets chiffrés (SOPS/age), aucune donnée réelle.
+- Secrets centralisés dans HashiCorp Vault (chiffrés au repos, accès par politique, journal d'audit), aucune donnée réelle.
 - Traçabilité : logs centralisés (Loki), corrélation SIEM, horodatage des
   remédiations.
 

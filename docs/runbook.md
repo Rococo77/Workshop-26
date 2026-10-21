@@ -99,13 +99,16 @@ n'est jamais dans la boucle de reprise live.
 
 ## 3. Secrets
 
+HashiCorp Vault est la source de vérité ; le `.env` n'en est qu'un rendu.
 ```bash
-scripts/secrets.sh init      # génère la clé age (une fois) ; MAJ .sops.yaml
-# éditer .env puis :
-scripts/secrets.sh encrypt   # .env -> secrets.enc.env (versionnable)
-scripts/secrets.sh decrypt   # secrets.enc.env -> .env (local)
+scripts/vault.sh init     # 1re fois : init, descellement, KV, audit, politique, import du .env
+scripts/vault.sh unseal   # après tout redémarrage de Vault (il repart scellé)
+scripts/vault.sh import   # après modification d'un secret dans .env
+scripts/vault.sh render   # Vault -> .env (fait aussi par Ansible deploy.yml)
+scripts/vault.sh status
 ```
-`age.key` et `.env` ne sont **jamais** versionnés (cf. `.gitignore`).
+`.vault/` (clé de descellement, jetons) et `.env` ne sont **jamais** versionnés.
+Interface d'administration : http://127.0.0.1:8201 (locale uniquement). Détails : `docs/vault.md`.
 
 ## 4. Vérification de l'état utilisable
 

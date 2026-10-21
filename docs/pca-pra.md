@@ -61,7 +61,7 @@ et automatisée via Ansible (`infra/ansible/ops.yml`) :
 - **Données** : sauvegarde logique `pg_dump` (`backup.yml`, horodatée + rétention)
   et **restauration prouvée** (`restore.yml`, vérifiée par le canari). Industriel :
   PITR (WAL archiving) + réplication streaming + bascule.
-- **Secrets** : régénérés/déchiffrés via SOPS/age au déploiement, jamais stockés
+- **Secrets** : rendus depuis HashiCorp Vault au déploiement, jamais stockés
   en clair.
 - **Configuration** : tout est code (Compose + Ansible) → reconstruction
   reproductible sur une machine propre.

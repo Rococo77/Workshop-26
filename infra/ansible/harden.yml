@@ -80,6 +80,8 @@
           - "'ra-remediation' not in published.stdout"
           - "'ra-docker-proxy' not in published.stdout"
           - "'ra-ml-detector' not in published.stdout"
+          # Vault : administration locale uniquement (127.0.0.1), jamais 0.0.0.0.
+          - "published.stdout_lines | select('search', '^ra-vault ') | select('search', '0\\.0\\.0\\.0|:::') | list | length == 0"
         fail_msg: "Un service interne est exposé ! Vérifier les 'ports:' du compose."
         success_msg: "Exposition réseau conforme (seuls WAF + Grafana publiés)."
 

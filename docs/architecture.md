@@ -47,7 +47,7 @@ décision → remédiation → vérification**, sans intervention humaine.
 | **Développement** | `payment-api`, `auth`, `frontend` (React/Tailwind), `supervision-bff` | Produit les signaux (métriques) ; le front rend l'état avant/pendant/après ; la transaction canari prouve la reprise |
 | **Infrastructure** | `docker-compose.yml`, playbooks Ansible, Prometheus/Grafana/Loki/Promtail | Déploiement reproductible ; l'observabilité alimente la détection |
 | **IA / Data** | `ml-detector` (IsolationForest), `rag-assistant` (Ollama+LangChain) | Le modèle **déclenche** la remédiation ; l'assistant aide l'opérateur (sans privilège) |
-| **Cybersécurité** | WAF ModSecurity+CRS, corrélation SIEM (Loki), secrets SOPS/age, durcissement | Le WAF bloque/trace ; le SIEM qualifie l'attaque et fournit l'IP source |
+| **Cybersécurité** | WAF ModSecurity+CRS, corrélation SIEM (Loki), secrets HashiCorp Vault, durcissement | Le WAF bloque/trace ; le SIEM qualifie l'attaque et fournit l'IP source |
 | **Gouvernance** | EBIOS RM, PCA/PRA, analyse NIS2/DORA | Justifie les services critiques, les objectifs de reprise, les arbitrages |
 
 ## 3. Flux métier nominal
@@ -198,14 +198,14 @@ Points clés de conception :
   redémarrée automatiquement) et une allowlist de playbooks.
 - **Assistant IA sans privilège** : le RAG lit un corpus documentaire en lecture
   seule ; il ne peut pas agir sur le système et est distinct de l'automate.
-- **Secrets** : aucun secret en clair (SOPS + age ; `.env` ignoré par git).
+- **Secrets** : aucun secret en clair. HashiCorp Vault est la source de vérité ; le `.env` est rendu au déploiement par un jeton en lecture seule et ignoré par git (`docs/vault.md`).
   Requêtes SQL **paramétrées**, validation d'entrées (Pydantic), pas de secret
   dans les logs, messages d'erreur sans oracle.
 
 ## 7. Du démonstrateur à l'industriel (arbitrages)
 
 - Front : mode dev Vite pour la démo → build statique servi par nginx en prod.
-- Secrets : SOPS/age (léger) → HashiCorp Vault (rotation, baux dynamiques).
+- Secrets : Vault nœud unique, descellement manuel → cluster Raft, auto-unseal (KMS/HSM), secrets dynamiques et lecture directe par les services (AppRole).
 - Inférence LLM : Ollama (démo, CPU/GPU) → vLLM/TGI derrière une API
   OpenAI-compatible en production (débit, batching continu).
 - Remédiation : socket Docker → orchestrateur avec RBAC (Kubernetes + Operator),

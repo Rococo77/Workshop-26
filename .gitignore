@@ -4,8 +4,9 @@
 !.env.example
 *.key
 *.pem
-age.key
 secrets.dec.*
+# Vault : clé de descellement, jeton racine et jeton de déploiement (local)
+.vault/
 
 # Python
 __pycache__/

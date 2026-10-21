@@ -16,7 +16,7 @@ canari). Aucune donnée bancaire réelle.
 - **Python 3** pour les scripts d'attaque et l'entraînement ML (bibliothèque
   standard uniquement côté attaque).
 - **WSL2 (Ubuntu)** requis uniquement pour **Ansible** et les scripts `.sh`
-  (`scripts/secrets.sh`, `scripts/demo.sh`). La voie `docker compose` ci-dessous
+  (`scripts/vault.sh`, `scripts/demo.sh`). La voie `docker compose` ci-dessous
   fonctionne telle quelle dans **PowerShell**, sans WSL.
 
 ## Démarrage rapide (`docker compose` — PowerShell ou bash)
@@ -63,7 +63,7 @@ Attaque (PC Attaquant) ─▶ WAF ─▶ API/Auth ─▶ PostgreSQL
 | Développement | `payment-api`, `auth`, `frontend` (React/Tailwind), `supervision-bff`, `face-api` (DeepFace : auto-inscription, connexion et virements validés par visage) |
 | Infrastructure | Docker Compose, Ansible, Prometheus/Grafana/Loki/Promtail |
 | IA / Data | `ml-detector` (IsolationForest), `rag-assistant` (Ollama + LangChain) |
-| Cybersécurité | WAF ModSecurity + OWASP CRS, SIEM (Loki), secrets SOPS/age |
+| Cybersécurité | WAF ModSecurity + OWASP CRS, SIEM (Loki), secrets HashiCorp Vault |
 | Gouvernance | EBIOS RM, PCA/PRA, NIS2/DORA (`docs/`) |
 
 ### Authentification : auto-inscription et connexion à deux facteurs
@@ -88,7 +88,7 @@ attack/              scripts Red Team (flood, sqli, exfil)
 ml/                  entraînement & évaluation du modèle de détection
 docs/                architecture, EBIOS RM, PCA/PRA, NIS2/DORA, runbook
 tests/               tests (auth, pool biométrique, détection, garde-fous remédiation, parsing SIEM)
-scripts/             secrets (SOPS/age), orchestration de démo, enrôlement facial opérateur
+scripts/             secrets (Vault : scripts/vault.sh), orchestration de démo, enrôlement facial opérateur
 docker-compose.yml   orchestration (réseaux segmentés)
 .github/workflows/   pipeline CI/CD (lint, tests, scan, E2E de résilience)
 Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
@@ -101,7 +101,7 @@ Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
 - **Disponibilité ≠ compromission** : playbooks distincts (DoS vs injection).
 - **Moindre privilège** : automate isolé (`control`), allowlists, pas d'UI admin
   exposée ; assistant IA en lecture seule, sans privilège.
-- **Aucun secret en clair** : SOPS/age, `.env` ignoré par git.
+- **Aucun secret en clair** : HashiCorp Vault (source de vérité), `.env` rendu au déploiement et ignoré par git.
 
 ## Documentation
 

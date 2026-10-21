@@ -2,7 +2,7 @@
 # ============================================================================
 #  Déploiement reproductible de la plateforme sur le PC Hôte.
 #  Place d'Ansible : automatiser les opérations prévues au cahier des charges
-#  (déploiement, déchiffrement des secrets, démarrage, vérification de santé).
+#  (déploiement, secrets rendus depuis Vault, démarrage, vérification de santé).
 # ============================================================================
 - name: Déployer PROJECT RESILIENCE-ALPHA
   hosts: host
@@ -23,30 +23,39 @@
       ansible.builtin.command: docker version
       changed_when: false
 
-    - name: Détecter des secrets chiffrés (SOPS)
+    # --- Secrets : Vault est la source de vérité, le .env n'est qu'un rendu ---
+    - name: Détecter un coffre Vault initialisé
       ansible.builtin.stat:
-        path: "{{ project_root }}/secrets.enc.env"
-      register: enc_secrets
+        path: "{{ project_root }}/.vault/init.json"
+      register: vault_init
 
-    - name: Vérifier qu'un .env est présent (voie démo locale, sans SOPS)
+    - name: Desceller Vault (il redémarre toujours scellé)
+      ansible.builtin.command: "bash scripts/vault.sh unseal"
+      args:
+        chdir: "{{ project_root }}"
+      register: unseal
+      changed_when: "'descellé.' in unseal.stdout and 'déjà' not in unseal.stdout"
+      when: vault_init.stat.exists
+
+    - name: Rendre le .env depuis Vault (jeton `deploy`, lecture seule)
+      ansible.builtin.command: "bash scripts/vault.sh render"
+      args:
+        chdir: "{{ project_root }}"
+      changed_when: true
+      when: vault_init.stat.exists
+
+    - name: Vérifier qu'un .env est présent
       ansible.builtin.stat:
         path: "{{ project_root }}/.env"
       register: env_present
 
-    - name: Déchiffrer les secrets vers .env (SOPS/age)
-      ansible.builtin.command: "bash scripts/secrets.sh decrypt"
-      args:
-        chdir: "{{ project_root }}"
-      changed_when: true
-      # Uniquement si des secrets chiffrés existent. Sinon, on s'appuie sur le
-      # .env déjà présent (voie démo locale) -> pas de dépendance à sops.
-      when: enc_secrets.stat.exists
-
-    - name: Refuser de continuer sans secrets ni .env
+    - name: Refuser de continuer sans secrets
       ansible.builtin.assert:
         that:
-          - enc_secrets.stat.exists or env_present.stat.exists
-        fail_msg: "Ni secrets.enc.env ni .env : copier .env.example -> .env."
+          - env_present.stat.exists
+        fail_msg: >-
+          Aucun .env : initialiser Vault (scripts/vault.sh init) ou, en démo
+          locale sans Vault, copier .env.example -> .env.
 
     - name: "Note : déploiement délégué à Docker Compose (Windows)"
       ansible.builtin.debug:

@@ -78,13 +78,14 @@ commande à lancer pour (re)mettre la plateforme en route et la contrôler.
 
 ### `preflight.yml` — prérequis (fin du « ça marche sur ma machine »)
 Vérifie : Docker présent, Docker Compose v2, collection `community.docker`
-installée, `sops` (si des secrets chiffrés existent), et la présence d'un `.env`
-ou `secrets.enc.env`. Échoue tôt et clairement si un prérequis manque.
+installée, le conteneur Vault (si le coffre est initialisé), et la présence
+d'un `.env` ou d'un coffre Vault. Échoue tôt et clairement si un prérequis manque.
 
 ### `deploy.yml` — déploiement
 1. Vérifie Docker.
-2. Déchiffre les secrets **si** `secrets.enc.env` existe (SOPS/age) ; sinon
-   s'appuie sur le `.env` présent (voie démo locale, sans dépendance à sops).
+2. **Si** Vault est initialisé (`.vault/init.json`) : le descelle puis rend le
+   `.env` avec le jeton `deploy` (lecture seule) ; sinon s'appuie sur le `.env`
+   présent (voie démo locale).
 3. Lance `docker compose up -d --build` via le module (selon `deploy_via_ansible`,
    voir §6) ; variante `with_ai=true` pour Ollama (détection GPU + pull modèles).
 4. **Attend `/api/ready` = 200** (20 essais) : la mise en route est *vérifiée*,
@@ -198,8 +199,8 @@ Docker Desktop :
 | `site.yml -e deploy_via_ansible=false` | ✅ `failed=0` (deploy sauté, vérif + harden OK) |
 | `site.yml` (deploy Ansible depuis WSL) | ⚠️ KO sous Docker Desktop (bind-mounts, §6) ; OK sur hôte Linux |
 
-Trois bugs trouvés et corrigés par ces tests : ordre de `require sops`
-(`scripts/secrets.sh`), déchiffrement SOPS conditionnel (`deploy.yml`), et
+Bugs trouvés et corrigés par ces tests : rendu Vault conditionnel
+(`deploy.yml`), et
 `pg_dump --clean --if-exists` pour une restauration idempotente (`backup.yml`).
 
 ---
