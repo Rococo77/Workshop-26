@@ -8,6 +8,11 @@
 - Docker Compose v2, 16 Go RAM (32 Go recommandé si profil IA sur le même poste).
 - Python 3 (pour les scripts d'attaque et d'entraînement ML).
 - Ports publiés : `8080` (WAF = front + API), `3000` (Grafana).
+- **Exposition réseau (démo)** : pour n'exposer QUE le réseau du groupe, régler
+  dans `.env` `EDGE_BIND=192.168.137.1` (interface du hotspot `RESILIENCE-G<n>`)
+  — le WAF et Grafana ne répondront alors que sur cette interface, pas sur le
+  WiFi du campus (sujet §4). `EDGE_PORT` (défaut 8080) permet de changer le port
+  hôte si 8080 est déjà pris (ex. Oracle TNS/APEX). En dev/CI : `EDGE_BIND=0.0.0.0`.
 - **WSL2 (Ubuntu)** nécessaire uniquement pour **Ansible** (option C) et les
   scripts `.sh`. Les options A/B (`docker compose`) tournent dans PowerShell.
 
@@ -52,14 +57,18 @@ Resources → WSL Integration, ou `integratedWslDistros: ["UbuntuRA"]` dans
 >   | sudo tee /etc/profile.d/docker-host.sh
 > ```
 
-> ⚠️ **`deploy.yml`/`site.yml` depuis WSL : placer le dépôt dans le système de
-> fichiers natif de la distro** (`~/Workshop-26`, pas `/mnt/c/...`). Depuis
-> `/mnt/c`, `docker compose` résout les *bind-mounts de fichiers* (ex.
-> `prometheus.yml`) en chemins `/mnt/c/...` que le moteur Docker Desktop ne sait
-> pas monter → `error mounting ... to rootfs`. Les playbooks sans bind-mount
-> (`preflight`, `harden`, `backup`, `restore`, `ops`) fonctionnent depuis
-> `/mnt/c`. Alternative pour déployer : `docker compose` côté **PowerShell**
-> (Option A), qui gère les chemins `C:\` correctement.
+> ⚠️ **Le `deploy` (docker compose) ne tourne PAS depuis WSL avec Docker
+> Desktop.** Le démon Docker vit dans la distro `docker-desktop` : un
+> `docker compose` lancé depuis une autre distro lui demande de monter des
+> fichiers (`prometheus.yml`, etc.) à des chemins (`/mnt/c/...` **ou** `/root/...`)
+> que le démon ne voit pas dans son propre espace → `error mounting ... to
+> rootfs`. Seul le client docker **Windows** résout correctement ces bind-mounts
+> (chemins `C:\`). Donc, sous **Windows + Docker Desktop** :
+> - **`deploy`** → via `docker compose` côté **PowerShell** (Option A, prouvé) ;
+> - **`preflight` / `harden` / `backup` / `restore` / `ops`** → depuis WSL, OK.
+>
+> Sur un **hôte Linux + Docker Engine** (client et démon partagent le FS), toute
+> la chaîne Ansible, `deploy` compris, fonctionne de bout en bout.
 
 **Lancement des playbooks** (le dépôt est vu sous `/mnt/c/...` ; `ansible.cfg`
 étant sur un montage *world-writable*, passer l'inventaire avec `-i`) :

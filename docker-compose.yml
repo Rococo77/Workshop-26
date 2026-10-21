@@ -71,8 +71,11 @@ services:
       - supervision-bff
     ports:
       # Unique interface publiée, bindée sur l'IP du PC Hôte (sujet §4).
-      # En local/CI, 0.0.0.0 ; en démo, remplacer par 192.168.137.1.
-      - "${EDGE_BIND:-0.0.0.0}:8080:8080"
+      # EDGE_BIND : interface d'écoute — 0.0.0.0 en local/CI, 192.168.137.1 en démo
+      #             (le hotspot RESILIENCE-G<n>) pour n'exposer QUE le réseau du groupe.
+      # EDGE_PORT : port hôte — 8080 par défaut ; changer si un service tiers
+      #             occupe déjà 8080 (ex. Oracle TNS/APEX) sans arrêter ce dernier.
+      - "${EDGE_BIND:-0.0.0.0}:${EDGE_PORT:-8080}:8080"
     environment:
       BACKEND_FRONTEND: "frontend:8080"
       BACKEND_API: "payment-api:8000"
@@ -327,7 +330,8 @@ services:
       - grafana-data:/var/lib/grafana
     ports:
       # Tableau de supervision pour le jury (observation, pas gestion métier).
-      - "${EDGE_BIND:-0.0.0.0}:3000:3000"
+      # Même interface que le WAF (EDGE_BIND) ; port configurable via GRAFANA_PORT.
+      - "${EDGE_BIND:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
     networks: [obs]
     logging: *default-logging
     labels:
