@@ -20,6 +20,7 @@ const DETAILS = {
   "transaction cancelled": "Ce virement a déjà été annulé.",
   "transaction face_mismatch": "Ce virement a été refusé après plusieurs échecs de reconnaissance.",
   "transaction settled": "Ce virement a déjà été validé.",
+  "face verification not configured": "La validation par visage n'est pas configurée pour ce compte. Contactez le support.",
 };
 
 // Validation faciale : l'API renvoie `detail: { code, attempts_left? }`.
@@ -35,6 +36,10 @@ const FACE_CODES = {
   image_too_large: "Image trop lourde. Reprenez la photo.",
   face_locked: "Trop d'échecs de reconnaissance. Réessayez dans 15 minutes.",
   face_unavailable: "La reconnaissance faciale est momentanément indisponible. Réessayez.",
+  // Auto-inscription (POST /api/auth/register).
+  username_taken: "Cet identifiant est déjà utilisé.",
+  invalid_username: "Identifiant invalide (3 à 32 caractères : lettres, chiffres, points, underscore).",
+  weak_password: "Mot de passe trop court (10 caractères minimum).",
 };
 
 export class ApiError extends Error {
@@ -75,12 +80,22 @@ async function request(path, { token, method = "GET", body } = {}) {
   return data;
 }
 
+// Mot de passe seul : pour un client, renvoie { status: "face_required",
+// pending_token, role } (pas un token d'accès) -> voir loginFace().
 export function login(username, password) {
   return request("/auth/login", { method: "POST", body: { username, password } }).catch((e) => {
     if (e.status === 401) throw new ApiError("Identifiant ou mot de passe incorrect.", 401);
     throw e;
   });
 }
+
+// Second facteur : visage, avec le `pending_token` renvoyé par login().
+export const loginFace = (pendingToken, image) =>
+  request("/api/auth/login/face", { token: pendingToken, method: "POST", body: { image } });
+
+// Auto-inscription : identifiant + mot de passe + visage en un seul appel.
+export const register = (username, password, image) =>
+  request("/api/auth/register", { method: "POST", body: { username, password, image } });
 
 export const getAccounts = (token) => request("/api/accounts/me", { token });
 

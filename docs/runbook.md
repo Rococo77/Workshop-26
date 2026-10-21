@@ -58,8 +58,21 @@ Interfaces :
 - Front + dashboard : http://127.0.0.1:8080
 - Grafana : http://127.0.0.1:3000 (admin / cf. `.env`)
 
-Comptes de démonstration (fictifs) : `alice`/`Alice#2026`, `bob`/`Bob#2026`,
-`operator`/`Operator#2026`, `admin`/`Admin#2026`.
+Comptes d'exploitation de démonstration (fictifs, mot de passe seul, pas de
+virement) : `operator`/`Operator#2026`, `admin`/`Admin#2026`.
+
+Les comptes « clients » ne sont plus semés : chaque client s'inscrit
+lui-même (identifiant, mot de passe, photo de son visage) via l'écran
+« Créer un compte » du front, ou directement :
+```bash
+curl -s -X POST http://127.0.0.1:8080/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"jordan\",\"password\":\"Jordan#2026\",\"image\":\"$(base64 -w0 moi.jpg)\"}"
+```
+La connexion d'un client exige ensuite le mot de passe **et** le visage :
+`POST /auth/login` renvoie un jeton intermédiaire (`pending_token`, ~2 min)
+si le mot de passe est correct, puis `POST /api/auth/login/face` (même
+photo que celle enrôlée) renvoie le jeton d'accès complet.
 
 ## 5. Démonstration de reprise autonome
 
@@ -106,21 +119,23 @@ docker kill ra-payment-api     # le détecteur voit up==0 -> restart auto -> can
 # Base existante (créée avant la validation faciale) : script idempotent
 docker exec -i ra-postgres psql -U payuser -d paymentdb < services/payment-api/db/init/03_face_verification.sql
 
-# Lier un visage à un client depuis une photo (opérateur, hors parcours web).
-# Nouveau client + compte :
+# Lier un visage à un client depuis une photo (opérateur, hors parcours web ;
+# un client normal passe par l'auto-inscription, voir §4 ci-dessus).
+# Nouveau client + compte (outil d'exploitation, hors auto-inscription) :
 scripts/enroll-face.sh moi.jpg jordan --create --password 'Jordan#2026' --balance 2500
 # Client existant (--replace pour écraser une empreinte déjà présente) :
-scripts/enroll-face.sh moi.jpg alice
+scripts/enroll-face.sh moi.jpg jordan --replace
 # Sans bash (PowerShell) :
 #   docker cp moi.jpg ra-payment-api:/tmp/face.jpg
-#   docker exec ra-payment-api python -m app.enroll_cli --username alice --photo /tmp/face.jpg
+#   docker exec ra-payment-api python -m app.enroll_cli --username jordan --photo /tmp/face.jpg --replace
 #   docker exec -u root ra-payment-api rm -f /tmp/face.jpg
 # L'empreinte vit en base (volume pgdata) : à refaire après `docker compose down -v`.
 # Ne jamais la versionner dans un seed : donnée biométrique (RGPD art. 9).
 
-# Réenrôler un client (supprime son empreinte, il refera la photo à la connexion)
+# Réenrôler un client (supprime son empreinte ; il devra refaire la photo à
+# sa prochaine connexion — login mot de passe + visage impossible sans elle)
 docker exec ra-postgres psql -U payuser -d paymentdb -c \
-  "DELETE FROM face_enrollment WHERE user_id = (SELECT id FROM app_user WHERE username = 'alice')"
+  "DELETE FROM face_enrollment WHERE user_id = (SELECT id FROM app_user WHERE username = 'jordan')"
 ```
 
 ## 8. Arrêt / remise à zéro

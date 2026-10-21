@@ -54,7 +54,9 @@ services:
     ports:
       # Unique interface publiée, bindée sur l'IP du PC Hôte (sujet §4).
       # En local/CI, 0.0.0.0 ; en démo, remplacer par 192.168.137.1.
-      - "${EDGE_BIND:-0.0.0.0}:8080:8080"
+      # EDGE_PORT permet de reloger le port hôte si 8080 est déjà pris localement
+      # (ex. TNS Listener Oracle) ; le conteneur sert toujours en interne sur 8080.
+      - "${EDGE_BIND:-0.0.0.0}:${EDGE_PORT:-8080}:8080"
     environment:
       BACKEND_FRONTEND: "frontend:8080"
       BACKEND_API: "payment-api:8000"
@@ -105,11 +107,14 @@ services:
       AUTH_BASE_URL: "http://auth:8000"
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-30}
+      FACE_PENDING_EXPIRE_SECONDS: ${FACE_PENDING_EXPIRE_SECONDS:-120}
       FACE_CONFIRMATION_REQUIRED: ${FACE_CONFIRMATION_REQUIRED:-true}
       FACE_API_URL: "http://face-api:5000"
       FACE_API_TOKEN: ${FACE_API_TOKEN:?FACE_API_TOKEN manquant dans .env}
       FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.30}
       FACE_ANTI_SPOOFING: ${FACE_ANTI_SPOOFING:-true}
+      REGISTRATION_STARTING_BALANCE: ${REGISTRATION_STARTING_BALANCE:-1000.00}
     networks: [app, data, biometric]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
@@ -161,6 +166,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-30}
+      FACE_PENDING_EXPIRE_SECONDS: ${FACE_PENDING_EXPIRE_SECONDS:-120}
     networks: [app, data]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]

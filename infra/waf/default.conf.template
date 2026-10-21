@@ -71,10 +71,11 @@ server {
         proxy_read_timeout 10s;
     }
 
-    # Enrôlement et confirmation faciale : photo en base64 brut dans le JSON
-    # (bornée par la limite ModSecurity des corps sans fichier, 128 Ko),
-    # inférence DeepFace -> délai plus long. Regex : prioritaire sur /api/.
-    location ~ ^/api/(face/enrollment|transactions/[0-9]+/confirm)$ {
+    # Enrôlement, confirmation, auto-inscription et second facteur faciaux :
+    # photo en base64 brut dans le JSON (bornée par la limite ModSecurity des
+    # corps sans fichier, 128 Ko), inférence DeepFace -> délai plus long et
+    # cible de force brute -> zone stricte. Regex : prioritaire sur /api/.
+    location ~ ^/api/(face/enrollment|transactions/[0-9]+/confirm|auth/register|auth/login/face)$ {
         limit_req zone=face burst=5 nodelay;
         rewrite ^/api/(.*)$ /$1 break;
         proxy_pass http://$up_api;

@@ -55,15 +55,18 @@ def log_attempt(
         )
 
 
-def recent_failures(username: str, minutes: int) -> int:
-    """Échecs de reconnaissance (visage différent ou spoof) sur la fenêtre."""
+def recent_failures(username: str, minutes: int, purpose: str = "confirm") -> int:
+    """Échecs de reconnaissance (visage différent ou spoof) sur la fenêtre,
+    pour un `purpose` donné ('confirm' ou 'login' : compteurs indépendants,
+    un client qui rate sa connexion ne doit pas épuiser ses essais sur une
+    confirmation de virement en cours, et inversement)."""
     with db.get_conn() as conn:
         row = conn.execute(
             "SELECT count(*) AS n FROM face_verification_log l "
             "JOIN app_user u ON u.id = l.user_id "
-            "WHERE u.username = %s AND l.purpose = 'confirm' "
+            "WHERE u.username = %s AND l.purpose = %s "
             "AND l.result IN ('mismatch', 'spoof') "
             "AND l.created_at > now() - make_interval(mins => %s)",
-            (username, minutes),
+            (username, purpose, minutes),
         ).fetchone()
     return row["n"]

@@ -1,7 +1,8 @@
 """API métier de paiement (fictif).
 
-Endpoints publics (via WAF) : /health, /accounts/me, /transactions,
-/face/enrollment et /transactions/{id}/confirm|cancel (validation faciale).
+Endpoints publics (via WAF) : /health, /auth/register, /auth/login/face,
+/accounts/me, /transactions, /face/enrollment et
+/transactions/{id}/confirm|cancel (validation faciale).
 Endpoint interne (non exposé au réseau pédagogique) : /internal/canary,
 utilisé par le moteur de remédiation pour prouver le retour à un état
 utilisable (transaction canari réelle en base).
@@ -18,8 +19,8 @@ from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
-from . import biometrics, db, face, service
-from .auth import Principal, current_customer
+from . import accounts, biometrics, db, face, service
+from .auth import Principal, create_access_token, current_customer, current_pending_face
 from .config import settings
 from .metrics import FACE_LATENCY, FACE_VERIFICATIONS, PAYMENT_TX, MetricsMiddleware
 
@@ -29,8 +30,9 @@ log = logging.getLogger("payment-api")
 app = FastAPI(title="Resilience-Alpha Payment API", version="1.0.0")
 app.add_middleware(MetricsMiddleware)
 
-# Comptes canari (seed) : alice(1) -> bob(2), montant symbolique.
-CANARY_SRC, CANARY_DST, CANARY_USER = 1, 2, "alice"
+# Comptes canari (seed, verrouillés, jamais connectés) : _canary_src(1) ->
+# _canary_dst(2), montant symbolique.
+CANARY_SRC, CANARY_DST, CANARY_USER = 1, 2, "_canary_src"
 
 
 class TransferRequest(BaseModel):
@@ -43,6 +45,12 @@ class TransferRequest(BaseModel):
 
 class FaceImage(BaseModel):
     # Photo JPEG/PNG en base64 brut (data URL acceptée). Taille fine contrôlée par face.py.
+    image: str = Field(min_length=16, max_length=face.MAX_IMAGE_B64_CHARS * 2)
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=1, max_length=256)
     image: str = Field(min_length=16, max_length=face.MAX_IMAGE_B64_CHARS * 2)
 
 
@@ -88,6 +96,91 @@ def ready() -> dict[str, str]:
 @app.get("/metrics")
 def metrics() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
+def register(req: RegisterRequest) -> dict:
+    """Auto-inscription : mot de passe + visage en un seul appel. Reprend
+    l'ordre de l'outil opérateur (`enroll_cli`) : on calcule l'empreinte
+    AVANT de créer le compte, pour ne rien persister si la photo est
+    inexploitable."""
+    try:
+        accounts.validate_username(req.username)
+        accounts.validate_password(req.password)
+    except accounts.AccountError as exc:
+        raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
+
+    # Pas d'audit `log_attempt` ici : le compte n'existe pas encore (rien à
+    # rattacher), et une photo inexploitable ne doit créer ni client ni trace.
+    try:
+        embedding = _embed(req.image, "enroll")
+    except face.FaceRejected as exc:
+        raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
+
+    try:
+        accounts.create_customer(
+            req.username, req.password, accounts.next_iban(), settings.registration_starting_balance
+        )
+    except accounts.AccountError as exc:
+        raise _face_error(status.HTTP_409_CONFLICT, exc.code) from exc
+
+    biometrics.save_enrollment(req.username, settings.face_model, embedding)
+    biometrics.log_attempt(req.username, purpose="enroll", result="enrolled", distance=None)
+    FACE_VERIFICATIONS.labels(purpose="enroll", result="enrolled").inc()
+    log.info("customer registered username=%s", req.username)
+
+    token = create_access_token(subject=req.username, role="customer")
+    return {"access_token": token, "token_type": "bearer", "role": "customer"}
+
+
+@app.post("/auth/login/face")
+def login_face(req: FaceImage, principal: Principal = Depends(current_pending_face)) -> dict:
+    """Second facteur de connexion : le mot de passe a déjà été vérifié par
+    le service auth, qui a émis un jeton `face_pending` de courte durée.
+    Même logique anti-force-brute / anti-spoof que la confirmation de
+    virement, compteur d'échecs indépendant (purpose='login')."""
+    user = principal.username
+    if biometrics.recent_failures(user, settings.face_lockout_minutes, purpose="login") >= (
+        settings.face_lockout_failures
+    ):
+        log.warning("face login lockout user=%s", user)
+        raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "face_locked")
+
+    enrollment = biometrics.get_enrollment(user)
+    if enrollment is None:
+        raise _face_error(status.HTTP_403_FORBIDDEN, "face_not_enrolled")
+    if enrollment["model_name"] != settings.face_model:
+        raise _face_error(status.HTTP_409_CONFLICT, "face_reenrollment_required")
+
+    distance: float | None = None
+    try:
+        probe = _embed(req.image, "login")
+        distance = face.cosine_distance(enrollment["embedding"], probe)
+        result = "match" if face.is_match(distance) else "mismatch"
+    except face.FaceRejected as exc:
+        if exc.code != "spoof":
+            raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
+        result = "spoof"
+
+    biometrics.log_attempt(user, purpose="login", result=result, distance=distance)
+    log.info(
+        "face login user=%s result=%s distance=%s",
+        user,
+        result,
+        f"{distance:.4f}" if distance is not None else "-",
+    )
+
+    if result != "match":
+        FACE_VERIFICATIONS.labels(purpose="login", result=result).inc()
+        left = settings.face_lockout_failures - biometrics.recent_failures(
+            user, settings.face_lockout_minutes, purpose="login"
+        )
+        code = "spoof" if result == "spoof" else "face_mismatch"
+        raise _face_error(status.HTTP_403_FORBIDDEN, code, attempts_left=max(0, left))
+
+    FACE_VERIFICATIONS.labels(purpose="login", result="match").inc()
+    token = create_access_token(subject=user, role=principal.role)
+    return {"access_token": token, "token_type": "bearer", "role": principal.role}
 
 
 @app.get("/accounts/me")

@@ -18,34 +18,11 @@ import sys
 from decimal import Decimal
 from pathlib import Path
 
-from . import biometrics, db, face
+from . import accounts, biometrics, face
 from .config import settings
 
 # Photo de téléphone pleine résolution : bien au-delà de la limite web.
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
-
-
-def _create_customer(username: str, password: str, iban: str, balance: Decimal) -> None:
-    with db.get_conn() as conn:
-        user = conn.execute(
-            "INSERT INTO app_user (username, password_hash, role) "
-            "VALUES (%s, crypt(%s, gen_salt('bf')), 'customer') "
-            "ON CONFLICT (username) DO NOTHING RETURNING id",
-            (username, password),
-        ).fetchone()
-        if user is None:
-            raise SystemExit(f"le client {username!r} existe déjà (retirer --create)")
-        conn.execute(
-            "INSERT INTO account (owner_id, iban_fake, balance, currency) "
-            "VALUES (%s, %s, %s, 'EUR')",
-            (user["id"], iban.strip().upper(), balance),
-        )
-
-
-def _next_iban() -> str:
-    with db.get_conn() as conn:
-        n = conn.execute("SELECT count(*) AS n FROM account").fetchone()["n"]
-    return f"FR76-FAKE-{n + 1:04d}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,8 +53,11 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     if args.create:
-        iban = args.iban or _next_iban()
-        _create_customer(args.username, args.password, iban, args.balance)
+        iban = args.iban or accounts.next_iban()
+        try:
+            accounts.create_customer(args.username, args.password, iban, args.balance)
+        except accounts.AccountError:
+            raise SystemExit(f"le client {args.username!r} existe déjà (retirer --create)") from None
         print(f"client {args.username} créé, compte {iban} ({args.balance} EUR)")
 
     if args.replace:
