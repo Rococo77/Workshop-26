@@ -20,6 +20,9 @@ GPIO (3,3 V) peuvent être endommagées.
 
 - Succès (`ok: true`) → verte allumée, rouge éteinte.
 - Échec (`ok: false`, visage différent ou spoof détecté) → rouge allumée, verte éteinte.
+- Chaque résultat reste affiché **10 secondes** puis s'éteint automatiquement
+  (repoussé si un nouvel événement arrive avant) : pas d'indicateur figé
+  indéfiniment entre deux vérifications.
 - Pas de connexion WebSocket (Wi-Fi coupé, backend indisponible) → les deux
   LED s'éteignent (pas de statut fiable à afficher).
 - Au démarrage : les deux LED clignotent deux fois (auto-test de câblage,
@@ -64,3 +67,22 @@ comme projet PlatformIO.
    → la LED verte s'allume. Tenter une connexion avec un visage différent
    → la LED rouge s'allume.
 4. Confirmer un virement par le visage → même comportement.
+
+## Dépannage
+
+- **Rien sur la carte après upload** : vérifier qu'aucun autre programme
+  (CLion, Arduino IDE, un autre `pio device monitor`) ne tient déjà le port
+  série — un seul processus peut l'ouvrir à la fois.
+- **`pio run -t upload` reste bloqué sans rien afficher** (Windows + projet
+  ouvert depuis WSL, chemin `\\wsl.localhost\...`) : le pont réseau
+  WSL↔Windows peut faire traîner indéfiniment PlatformIO. Copier le dossier
+  vers un chemin Windows natif (ex. `%USERPROFILE%\face-led-build`) et
+  lancer `pio run -t upload` depuis là résout le problème.
+- **L'ESP se connecte au Wi-Fi mais jamais au WebSocket** (`[ws] déconnecté`
+  en boucle) : le pare-feu Windows du PC Hôte bloque souvent les connexions
+  entrantes sur les réseaux classés *Public*. Autoriser le port du WAF en
+  entrée (PowerShell **administrateur**) :
+  ```powershell
+  New-NetFirewallRule -DisplayName "Resilience-Alpha WAF" -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow
+  ```
+  (adapter `8080` à `EDGE_PORT` si modifié dans le `.env` du dépôt principal).
