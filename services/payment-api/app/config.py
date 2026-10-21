@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # Auto-inscription (mot de passe + visage, POST /auth/register).
     registration_starting_balance: Decimal = Decimal("1000.00")
 
+    # Relais WebSocket temps réel des vérifications faciales (indicateur LED
+    # ESP8266, voir firmware/face-led/) : jeton partagé, fonctionnalité annexe.
+    esp_events_token: str = "dev-only-change-me"
+
     # Validation faciale des virements (API DeepFace interne).
     face_confirmation_required: bool = True
     face_api_url: str = "http://face-api:5000"

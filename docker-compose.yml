@@ -115,6 +115,8 @@ services:
       FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.30}
       FACE_ANTI_SPOOFING: ${FACE_ANTI_SPOOFING:-true}
       REGISTRATION_STARTING_BALANCE: ${REGISTRATION_STARTING_BALANCE:-1000.00}
+      # Relais WebSocket temps réel (indicateur LED ESP8266, voir firmware/face-led/).
+      ESP_EVENTS_TOKEN: ${ESP_EVENTS_TOKEN:-dev-only-change-me}
     networks: [app, data, biometric]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]

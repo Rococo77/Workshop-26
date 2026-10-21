@@ -5,6 +5,7 @@ et l'outil d'enrôlement opérateur (`enroll_cli`, hors parcours web).
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from decimal import Decimal
 
 from . import db
@@ -40,16 +41,20 @@ def next_iban() -> str:
     return f"FR76-FAKE-{n + 1:04d}"
 
 
-def create_customer(username: str, password: str, iban: str, balance: Decimal) -> int:
-    """Crée un client (rôle `customer`) et son compte. Lève
-    `AccountError("username_taken")` si le nom est déjà pris. Renvoie l'id
-    du nouvel utilisateur."""
+def create_customer(
+    username: str, password: str, iban: str, balance: Decimal, consent_at: datetime
+) -> int:
+    """Crée un client (rôle `customer`) et son compte. `consent_at` : date à
+    laquelle le consentement au traitement de la donnée biométrique a été
+    recueilli (RGPD art. 9) — toujours requis, aucun enrôlement sans
+    consentement tracé. Lève `AccountError("username_taken")` si le nom est
+    déjà pris. Renvoie l'id du nouvel utilisateur."""
     with db.get_conn() as conn:
         user = conn.execute(
-            "INSERT INTO app_user (username, password_hash, role) "
-            "VALUES (%s, crypt(%s, gen_salt('bf')), 'customer') "
+            "INSERT INTO app_user (username, password_hash, role, biometric_consent_at) "
+            "VALUES (%s, crypt(%s, gen_salt('bf')), 'customer', %s) "
             "ON CONFLICT (username) DO NOTHING RETURNING id",
-            (username, password),
+            (username, password, consent_at),
         ).fetchone()
         if user is None:
             raise AccountError("username_taken")

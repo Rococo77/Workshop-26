@@ -1,6 +1,7 @@
-"""Persistance biométrique : empreinte de référence et journal d'audit.
+"""Persistance biométrique : pool d'empreintes de référence (une par pose :
+face, left, right, up, down) et journal d'audit.
 
-Seul le vecteur d'empreinte est stocké, jamais l'image (minimisation).
+Seuls les vecteurs d'empreinte sont stockés, jamais les photos (minimisation).
 """
 
 from __future__ import annotations
@@ -9,39 +10,60 @@ from . import db
 
 
 def get_enrollment(username: str) -> dict | None:
+    """Pool complet de l'utilisateur, ou `None` si rien n'est enrôlé.
+    `poses` : `{pose: embedding}` (une entrée par pose enrôlée)."""
     with db.get_conn() as conn:
-        return conn.execute(
-            "SELECT e.model_name, e.embedding, e.created_at FROM face_enrollment e "
+        rows = conn.execute(
+            "SELECT e.pose, e.model_name, e.embedding, e.created_at FROM face_enrollment e "
             "JOIN app_user u ON u.id = e.user_id WHERE u.username = %s",
             (username,),
-        ).fetchone()
+        ).fetchall()
+    if not rows:
+        return None
+    return {
+        "model_name": rows[0]["model_name"],
+        "created_at": min(r["created_at"] for r in rows),
+        "poses": {r["pose"]: r["embedding"] for r in rows},
+    }
 
 
-def save_enrollment(username: str, model_name: str, embedding: list[float]) -> bool:
-    """Enrôlement unique : False si une empreinte existe déjà (pas d'écrasement
-    silencieux par quiconque détient le mot de passe)."""
+def _replace_all(conn, user_id: int, model_name: str, poses: dict[str, list[float]]) -> None:
+    for pose, embedding in poses.items():
+        conn.execute(
+            "INSERT INTO face_enrollment (user_id, pose, model_name, embedding) "
+            "VALUES (%s, %s, %s, %s)",
+            (user_id, pose, model_name, embedding),
+        )
+
+
+def save_enrollment(username: str, model_name: str, poses: dict[str, list[float]]) -> bool:
+    """Enrôlement unique : tout le pool (5 poses) est écrit d'un coup, de
+    façon atomique. `False` si l'utilisateur n'existe pas, ou si une
+    empreinte existe déjà (pas d'écrasement silencieux par quiconque détient
+    le mot de passe)."""
     with db.get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO face_enrollment (user_id, model_name, embedding) "
-            "SELECT id, %s, %s FROM app_user WHERE username = %s "
-            "ON CONFLICT (user_id) DO NOTHING RETURNING user_id",
-            (model_name, embedding, username),
+        user = conn.execute("SELECT id FROM app_user WHERE username = %s", (username,)).fetchone()
+        if user is None:
+            return False
+        exists = conn.execute(
+            "SELECT 1 FROM face_enrollment WHERE user_id = %s LIMIT 1", (user["id"],)
         ).fetchone()
-    return row is not None
+        if exists is not None:
+            return False
+        _replace_all(conn, user["id"], model_name, poses)
+    return True
 
 
-def replace_enrollment(username: str, model_name: str, embedding: list[float]) -> bool:
-    """Réservé à l'outil d'admin (enroll_cli) : écrase l'empreinte existante.
-    False si l'utilisateur n'existe pas."""
+def replace_enrollment(username: str, model_name: str, poses: dict[str, list[float]]) -> bool:
+    """Réservé à l'outil d'admin (enroll_cli) : écrase le pool existant.
+    `False` si l'utilisateur n'existe pas."""
     with db.get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO face_enrollment (user_id, model_name, embedding) "
-            "SELECT id, %s, %s FROM app_user WHERE username = %s "
-            "ON CONFLICT (user_id) DO UPDATE SET model_name = EXCLUDED.model_name, "
-            "embedding = EXCLUDED.embedding, created_at = now() RETURNING user_id",
-            (model_name, embedding, username),
-        ).fetchone()
-    return row is not None
+        user = conn.execute("SELECT id FROM app_user WHERE username = %s", (username,)).fetchone()
+        if user is None:
+            return False
+        conn.execute("DELETE FROM face_enrollment WHERE user_id = %s", (user["id"],))
+        _replace_all(conn, user["id"], model_name, poses)
+    return True
 
 
 def log_attempt(

@@ -135,3 +135,73 @@ def test_recent_failures_filters_by_purpose(monkeypatch):
 
     biometrics.recent_failures("jordan", 15)  # défaut inchangé : 'confirm'
     assert fake.params == ("jordan", "confirm", 15)
+
+
+# ------------------------------------------- biometrics.py (pool multi-poses)
+class _FakeMultiConn:
+    """Journalise tous les appels `execute()` ; `fetchone()` consomme les
+    résultats fournis dans l'ordre, `fetchall()` renvoie un jeu fixe."""
+
+    def __init__(self, fetchone_results=(), fetchall_result=None):
+        self._fetchone_results = list(fetchone_results)
+        self._fetchall_result = [] if fetchall_result is None else fetchall_result
+        self.calls = []
+
+    def execute(self, sql, params):
+        self.calls.append((sql, params))
+        return self
+
+    def fetchone(self):
+        return self._fetchone_results.pop(0) if self._fetchone_results else None
+
+    def fetchall(self):
+        return self._fetchall_result
+
+
+def _patch_get_conn(monkeypatch, fake):
+    @contextlib.contextmanager
+    def fake_get_conn():
+        yield fake
+
+    monkeypatch.setattr(biometrics.db, "get_conn", fake_get_conn)
+
+
+def test_save_enrollment_writes_all_poses_atomically(monkeypatch):
+    # L'utilisateur existe (id=42), aucune empreinte déjà enregistrée.
+    fake = _FakeMultiConn(fetchone_results=[{"id": 42}, None])
+    _patch_get_conn(monkeypatch, fake)
+
+    poses = {"face": [0.1], "right": [0.2], "up": [0.3], "down": [0.4], "left": [0.5]}
+    assert biometrics.save_enrollment("jordan", "Facenet512", poses) is True
+
+    inserts = [c for c in fake.calls if c[0].startswith("INSERT")]
+    assert len(inserts) == 5
+    assert {params[1] for _, params in inserts} == set(poses)  # une ligne par pose
+
+
+def test_save_enrollment_refuses_silently_if_already_enrolled(monkeypatch):
+    # L'utilisateur existe, une empreinte existe déjà pour une pose au moins.
+    fake = _FakeMultiConn(fetchone_results=[{"id": 42}, {"exists": 1}])
+    _patch_get_conn(monkeypatch, fake)
+
+    assert biometrics.save_enrollment("jordan", "Facenet512", {"face": [0.1]}) is False
+    assert not any(c[0].startswith("INSERT") for c in fake.calls)
+
+
+def test_get_enrollment_groups_poses_into_a_dict(monkeypatch):
+    rows = [
+        {"pose": "face", "model_name": "Facenet512", "embedding": [0.1], "created_at": 2},
+        {"pose": "left", "model_name": "Facenet512", "embedding": [0.2], "created_at": 1},
+    ]
+    fake = _FakeMultiConn(fetchall_result=rows)
+    _patch_get_conn(monkeypatch, fake)
+
+    enrollment = biometrics.get_enrollment("jordan")
+    assert enrollment["poses"] == {"face": [0.1], "left": [0.2]}
+    assert enrollment["model_name"] == "Facenet512"
+
+
+def test_get_enrollment_returns_none_when_no_pose_is_enrolled(monkeypatch):
+    fake = _FakeMultiConn(fetchall_result=[])
+    _patch_get_conn(monkeypatch, fake)
+    assert biometrics.get_enrollment("ghost") is None

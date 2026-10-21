@@ -56,12 +56,21 @@ for _ in $(seq 1 60); do
 done
 [ "$ready" = "1" ] || { ko "API jamais prête"; exit 1; }
 
-log "Auto-inscription — mot de passe + visage (photo de test)"
+log "Auto-inscription — mot de passe + pool de 5 photos (même photo de test)"
 TMP_REGISTER_JSON="$(mktemp)"
 python3 - "$TMP_REGISTER_JSON" <<'PY'
 import base64, json, sys
 img = base64.b64encode(open("tests/fixtures/sample-face.jpg", "rb").read()).decode()
-json.dump({"username": "alice", "password": "Alice#2026", "image": img}, open(sys.argv[1], "w"))
+poses = ("right", "up", "down", "left", "face")
+json.dump(
+    {
+        "username": "alice",
+        "password": "Alice#2026",
+        "consent": True,
+        "images": {pose: img for pose in poses},
+    },
+    open(sys.argv[1], "w"),
+)
 PY
 REG_BODY=$(curl -s -X POST "$BASE/api/auth/register" -H 'Content-Type: application/json' \
   --data-binary @"$TMP_REGISTER_JSON")
