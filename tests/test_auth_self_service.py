@@ -14,8 +14,8 @@ fastapi = pytest.importorskip("fastapi")
 pytest.importorskip("pydantic_settings")
 pytest.importorskip("psycopg")
 
-from fastapi.security import HTTPAuthorizationCredentials  # noqa: E402
 from conftest import load_service_module  # noqa: E402
+from fastapi.security import HTTPAuthorizationCredentials  # noqa: E402
 
 config = load_service_module("payment_api", "services/payment-api", "config")
 db = load_service_module("payment_api", "services/payment-api", "db")

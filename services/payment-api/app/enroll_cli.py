@@ -46,7 +46,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--username", required=True)
     for pose in face.REQUIRED_POSES:
-        ap.add_argument(f"--photo-{pose}", required=True, type=Path, help=f"JPEG/PNG, pose '{pose}'")
+        ap.add_argument(
+            f"--photo-{pose}", required=True, type=Path, help=f"JPEG/PNG, pose '{pose}'"
+        )
     ap.add_argument("--create", action="store_true", help="crée le client et son compte")
     ap.add_argument("--password", help="mot de passe du nouveau client (--create)")
     ap.add_argument("--iban", help="IBAN fictif du nouveau compte (défaut : suivant libre)")
@@ -54,7 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--consent",
         action="store_true",
-        help="atteste que le consentement biométrique du client a été recueilli (requis avec --create)",
+        help=(
+            "atteste que le consentement biométrique du client a été recueilli "
+            "(requis avec --create)"
+        ),
     )
     ap.add_argument("--replace", action="store_true", help="écrase le pool d'empreintes existant")
     args = ap.parse_args(argv)
@@ -66,7 +71,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Empreintes d'abord : on ne crée pas de client si une seule photo est
     # inexploitable (fail-fast, aucune écriture partielle).
-    embeddings = {pose: _embed_photo(pose, getattr(args, f"photo_{pose}")) for pose in face.REQUIRED_POSES}
+    embeddings = {
+        pose: _embed_photo(pose, getattr(args, f"photo_{pose}")) for pose in face.REQUIRED_POSES
+    }
 
     if args.create:
         iban = args.iban or accounts.next_iban()
@@ -75,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
                 args.username, args.password, iban, args.balance, consent_at=datetime.now(UTC)
             )
         except accounts.AccountError:
-            raise SystemExit(f"le client {args.username!r} existe déjà (retirer --create)") from None
+            raise SystemExit(
+                f"le client {args.username!r} existe déjà (retirer --create)"
+            ) from None
         print(f"client {args.username} créé, compte {iban} ({args.balance} EUR)")
 
     if args.replace:
@@ -92,7 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     biometrics.log_attempt(
         args.username, purpose="enroll", result="enrolled_by_operator", distance=None
     )
-    print(f"visage enregistré pour {args.username} ({settings.face_model}, {len(embeddings)} poses)")
+    print(
+        f"visage enregistré pour {args.username} "
+        f"({settings.face_model}, {len(embeddings)} poses)"
+    )
     return 0
 
 
