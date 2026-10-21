@@ -52,13 +52,58 @@ décision → remédiation → vérification**, sans intervention humaine.
 
 ## 3. Flux métier nominal
 
-1. L'utilisateur s'authentifie (`auth` → JWT HS256, `iss`/`exp` vérifiés).
+1. L'utilisateur s'authentifie (`auth` → JWT HS256, `iss`/`exp` vérifiés ;
+   mot de passe **+** visage pour un client — voir §3.1).
 2. Le front appelle `payment-api` avec le jeton.
 3. `payment-api` exécute un **virement atomique** (verrou pessimiste ordonné,
    contrôle de solde, écriture transactionnelle) sur PostgreSQL.
 4. Chaque requête émet des métriques Prometheus (taux, latence, statut, métier).
 
-### 3.1 Validation faciale des virements (DeepFace)
+### 3.1 Auto-inscription et connexion à deux facteurs (mot de passe + visage)
+
+Il n'existe aucun compte client pré-créé : chaque client s'inscrit
+lui-même, et se connecte ensuite avec son mot de passe **et** son visage.
+
+```
+front ──pop-up consentement (obligatoire) ──▶ 5 photos (droite,haut,bas,gauche,face)
+front ──POST /auth/register {user,pwd,consent,images}──▶ payment-api ──/represent×5──▶ face-api
+                                   création compte + pool de 5 empreintes ◀── jeton complet
+
+front ──POST /auth/login {user,pwd}──▶ auth ── mot de passe correct ? ──▶ jeton "pending" (~2 min)
+front ──1 photo──▶ POST /auth/login/face (Bearer pending) ──▶ payment-api ──/represent──▶ face-api
+                                   distance cosinus minimale sur le pool ≤ 0,30 ? ──▶ jeton d'accès complet
+```
+
+- **Pool de 5 empreintes, une seule photo pour reconnaître** : l'inscription
+  capture 5 poses (droite, haut, bas, gauche, face) — une empreinte par pose
+  (`face_enrollment`, clé `(user_id, pose)`). À la connexion ou à la
+  confirmation d'un virement, UNE SEULE photo suffit : elle est comparée aux
+  5 empreintes du pool et la distance **minimale** est retenue
+  (`face.best_distance`). Plus tolérant à l'angle/l'éclairage qu'une
+  empreinte unique, sans rien changer au seuil de décision (0,30).
+- **Consentement (RGPD art. 9)** : un pop-up bloquant, affiché avant toute
+  capture photo, doit être explicitement accepté. La date est tracée
+  (`app_user.biometric_consent_at`). **Limite du démonstrateur** : la
+  suppression automatique après 2 ans d'inactivité annoncée à l'utilisateur
+  n'est **pas implémentée** (pas de suivi d'activité, pas de job de purge) —
+  chantier identifié pour une mise en production (§7).
+- **Pourquoi `payment-api` et pas `auth` vérifie le visage** : seul
+  `payment-api` est relié au réseau `biometric` (isolement de `face-api`,
+  voir §3.2) ; `auth` ne vérifie que le mot de passe et émet un jeton
+  intermédiaire (claim `typ=face_pending`, courte durée, n'ouvre aucune
+  route métier) que `payment-api` consomme pour le second facteur.
+- **Un seul enrôlement, atomique** : l'auto-inscription capture les 5 photos
+  et crée le pool d'empreintes dans le même appel que la création du compte
+  (tout ou rien : une seule photo inexploitable annule l'inscription) — le
+  pool utilisé pour la **connexion** est le même que celui utilisé pour la
+  **confirmation de virement** (§3.2), aucune duplication.
+- **operator/admin** : rôles d'exploitation (supervision), sans compte
+  bancaire ni visage enrôlé — connexion mot de passe seul, inchangée.
+- **Comptes canari** (`_canary_src`/`_canary_dst`, verrouillés, jamais
+  connectés) : utilisés uniquement par `/internal/canary` (remédiation),
+  qui ne passe pas par `auth`.
+
+### 3.2 Validation faciale des virements (DeepFace)
 
 Un virement client n'est réglé qu'après reconnaissance du visage du titulaire.
 
@@ -167,3 +212,8 @@ Points clés de conception :
   actions signées et journal d'audit immuable.
 - SIEM : corrélation Loki → SIEM dédié (Wazuh/Elastic) avec règles de détection
   versionnées.
+- Rétention biométrique : consentement tracé (`biometric_consent_at`), sans
+  suivi d'activité ni purge automatique → en production, horodatage de
+  dernière utilisation et job planifié supprimant le pool d'empreintes
+  2 ans après la dernière connexion/confirmation (politique annoncée à
+  l'utilisateur dès l'inscription, voir §3.1).

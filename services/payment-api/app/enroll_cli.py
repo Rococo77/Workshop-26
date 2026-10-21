@@ -1,13 +1,17 @@
-"""Enrôlement facial par un opérateur, depuis une photo, hors parcours web.
+"""Enrôlement facial par un opérateur, depuis 5 photos (pool de poses), hors
+parcours web.
 
-Lie l'empreinte d'un visage à un client existant, ou crée le client (mot de
-passe haché par pgcrypto, comme le seed) et son compte. Exécuté DANS le
-conteneur payment-api (accès à face-api et à la base, jamais exposé au WAF) :
+Lie le pool d'empreintes d'un visage à un client existant, ou crée le client
+(mot de passe haché par pgcrypto, comme le seed) et son compte. Exécuté DANS
+le conteneur payment-api (accès à face-api et à la base, jamais exposé au
+WAF) :
 
-    scripts/enroll-face.sh moi.jpg jordan --create --password 'Jordan#2026'
+    scripts/enroll-face.sh jordan --create --password 'Jordan#2026' --consent \\
+        --photo-face moi-face.jpg --photo-right moi-droite.jpg \\
+        --photo-up moi-haut.jpg --photo-down moi-bas.jpg --photo-left moi-gauche.jpg
 
-(le script copie la photo dans le conteneur, lance ce module, puis supprime la
-photo : seule l'empreinte est stockée).
+(le script copie les photos dans le conteneur, lance ce module, puis les
+supprime : seules les empreintes sont stockées).
 """
 
 from __future__ import annotations
@@ -15,75 +19,69 @@ from __future__ import annotations
 import argparse
 import base64
 import sys
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from . import biometrics, db, face
+from . import accounts, biometrics, face
 from .config import settings
 
 # Photo de téléphone pleine résolution : bien au-delà de la limite web.
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 
 
-def _create_customer(username: str, password: str, iban: str, balance: Decimal) -> None:
-    with db.get_conn() as conn:
-        user = conn.execute(
-            "INSERT INTO app_user (username, password_hash, role) "
-            "VALUES (%s, crypt(%s, gen_salt('bf')), 'customer') "
-            "ON CONFLICT (username) DO NOTHING RETURNING id",
-            (username, password),
-        ).fetchone()
-        if user is None:
-            raise SystemExit(f"le client {username!r} existe déjà (retirer --create)")
-        conn.execute(
-            "INSERT INTO account (owner_id, iban_fake, balance, currency) "
-            "VALUES (%s, %s, %s, 'EUR')",
-            (user["id"], iban.strip().upper(), balance),
-        )
-
-
-def _next_iban() -> str:
-    with db.get_conn() as conn:
-        n = conn.execute("SELECT count(*) AS n FROM account").fetchone()["n"]
-    return f"FR76-FAKE-{n + 1:04d}"
+def _embed_photo(pose: str, photo: Path) -> list[float]:
+    raw = photo.read_bytes()
+    if len(raw) > MAX_PHOTO_BYTES:
+        raise SystemExit(f"photo '{pose}' trop lourde (15 Mo max)")
+    try:
+        return face.embed(base64.b64encode(raw).decode(), max_chars=MAX_PHOTO_BYTES * 2)
+    except face.FaceRejected as exc:
+        raise SystemExit(f"photo '{pose}' refusée : {exc.code}") from None
+    except face.FaceUnavailable as exc:
+        raise SystemExit(f"face-api indisponible (photo '{pose}') : {exc}") from None
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--username", required=True)
-    ap.add_argument("--photo", required=True, type=Path, help="JPEG ou PNG, un seul visage")
+    for pose in face.REQUIRED_POSES:
+        ap.add_argument(f"--photo-{pose}", required=True, type=Path, help=f"JPEG/PNG, pose '{pose}'")
     ap.add_argument("--create", action="store_true", help="crée le client et son compte")
     ap.add_argument("--password", help="mot de passe du nouveau client (--create)")
     ap.add_argument("--iban", help="IBAN fictif du nouveau compte (défaut : suivant libre)")
     ap.add_argument("--balance", type=Decimal, default=Decimal("2500.00"))
-    ap.add_argument("--replace", action="store_true", help="écrase une empreinte existante")
+    ap.add_argument(
+        "--consent",
+        action="store_true",
+        help="atteste que le consentement biométrique du client a été recueilli (requis avec --create)",
+    )
+    ap.add_argument("--replace", action="store_true", help="écrase le pool d'empreintes existant")
     args = ap.parse_args(argv)
 
     if args.create and not args.password:
         ap.error("--create exige --password")
-    raw = args.photo.read_bytes()
-    if len(raw) > MAX_PHOTO_BYTES:
-        ap.error("photo trop lourde (15 Mo max)")
+    if args.create and not args.consent:
+        ap.error("--create exige --consent (consentement biométrique recueilli)")
 
-    # Empreinte d'abord : on ne crée pas de client si la photo est inexploitable.
-    try:
-        embedding = face.embed(base64.b64encode(raw).decode(), max_chars=MAX_PHOTO_BYTES * 2)
-    except face.FaceRejected as exc:
-        print(f"photo refusée : {exc.code}", file=sys.stderr)
-        return 2
-    except face.FaceUnavailable as exc:
-        print(f"face-api indisponible : {exc}", file=sys.stderr)
-        return 3
+    # Empreintes d'abord : on ne crée pas de client si une seule photo est
+    # inexploitable (fail-fast, aucune écriture partielle).
+    embeddings = {pose: _embed_photo(pose, getattr(args, f"photo_{pose}")) for pose in face.REQUIRED_POSES}
 
     if args.create:
-        iban = args.iban or _next_iban()
-        _create_customer(args.username, args.password, iban, args.balance)
+        iban = args.iban or accounts.next_iban()
+        try:
+            accounts.create_customer(
+                args.username, args.password, iban, args.balance, consent_at=datetime.now(UTC)
+            )
+        except accounts.AccountError:
+            raise SystemExit(f"le client {args.username!r} existe déjà (retirer --create)") from None
         print(f"client {args.username} créé, compte {iban} ({args.balance} EUR)")
 
     if args.replace:
-        ok = biometrics.replace_enrollment(args.username, settings.face_model, embedding)
+        ok = biometrics.replace_enrollment(args.username, settings.face_model, embeddings)
     else:
-        ok = biometrics.save_enrollment(args.username, settings.face_model, embedding)
+        ok = biometrics.save_enrollment(args.username, settings.face_model, embeddings)
         if not ok and biometrics.get_enrollment(args.username) is not None:
             print("empreinte déjà enregistrée (utiliser --replace)", file=sys.stderr)
             return 4
@@ -94,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     biometrics.log_attempt(
         args.username, purpose="enroll", result="enrolled_by_operator", distance=None
     )
-    print(f"visage enregistré pour {args.username} ({settings.face_model}, {len(embedding)} d)")
+    print(f"visage enregistré pour {args.username} ({settings.face_model}, {len(embeddings)} poses)")
     return 0
 
 

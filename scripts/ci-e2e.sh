@@ -12,7 +12,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-BASE="http://127.0.0.1:8080"
+EDGE_PORT="${EDGE_PORT:-$(grep -m1 '^EDGE_PORT=' "${ROOT}/.env" 2>/dev/null | cut -d= -f2)}"
+BASE="http://127.0.0.1:${EDGE_PORT:-8080}"
 FAIL=0
 
 log()  { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
@@ -27,6 +28,11 @@ cleanup() {
       echo "---- logs $c ----"; docker logs "$c" --tail 40 2>&1 || true
     done
   fi
+  # Compte de test créé par l'auto-inscription (voir plus bas) : jamais de
+  # données résiduelles, même en local où la stack/les volumes sont préservés.
+  docker exec ra-postgres psql -U payuser -d paymentdb -c \
+    "DELETE FROM app_user WHERE username = 'alice'" >/dev/null 2>&1 || true
+  rm -f "${TMP_REGISTER_JSON:-}" "${TMP_FACE_JSON:-}"
   # Volumes supprimés en CI uniquement : en local, on préserve les données
   # (Postgres, Grafana, modèle Ollama) et la stack reste démarrée.
   if [ -n "${CI:-}" ]; then
@@ -50,12 +56,46 @@ for _ in $(seq 1 60); do
 done
 [ "$ready" = "1" ] || { ko "API jamais prête"; exit 1; }
 
-log "État nominal — authentification + transaction canari"
-TOKEN=$(curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"Alice#2026"}' \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
-[ -n "$TOKEN" ] && ok "login JWT" || ko "login JWT"
+log "Auto-inscription — mot de passe + pool de 5 photos (même photo de test)"
+TMP_REGISTER_JSON="$(mktemp)"
+python3 - "$TMP_REGISTER_JSON" <<'PY'
+import base64, json, sys
+img = base64.b64encode(open("tests/fixtures/sample-face.jpg", "rb").read()).decode()
+poses = ("right", "up", "down", "left", "face")
+json.dump(
+    {
+        "username": "alice",
+        "password": "Alice#2026",
+        "consent": True,
+        "images": {pose: img for pose in poses},
+    },
+    open(sys.argv[1], "w"),
+)
+PY
+REG_BODY=$(curl -s -X POST "$BASE/api/auth/register" -H 'Content-Type: application/json' \
+  --data-binary @"$TMP_REGISTER_JSON")
+REG_TOKEN=$(echo "$REG_BODY" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+[ -n "$REG_TOKEN" ] && ok "auto-inscription (mot de passe + visage)" || ko "auto-inscription : $REG_BODY"
 
+log "Connexion — mot de passe puis second facteur (même photo, déterministe)"
+LOGIN_BODY=$(curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"Alice#2026"}')
+PENDING=$(echo "$LOGIN_BODY" \
+  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("pending_token") or "")' 2>/dev/null)
+[ -n "$PENDING" ] && ok "login (mot de passe) -> second facteur requis" || ko "login : $LOGIN_BODY"
+
+TMP_FACE_JSON="$(mktemp)"
+python3 - "$TMP_FACE_JSON" <<'PY'
+import base64, json, sys
+img = base64.b64encode(open("tests/fixtures/sample-face.jpg", "rb").read()).decode()
+json.dump({"image": img}, open(sys.argv[1], "w"))
+PY
+FACE_BODY=$(curl -s -X POST "$BASE/api/auth/login/face" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PENDING" --data-binary @"$TMP_FACE_JSON")
+TOKEN=$(echo "$FACE_BODY" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+[ -n "$TOKEN" ] && ok "login (second facteur visage)" || ko "login/face : $FACE_BODY"
+
+log "État nominal — transaction canari"
 canary() {
   docker exec ra-payment-api python -c \
     "import urllib.request,json;r=urllib.request.urlopen(urllib.request.Request('http://localhost:8000/internal/canary',method='POST'),timeout=5);print(json.load(r).get('canary'))" 2>/dev/null

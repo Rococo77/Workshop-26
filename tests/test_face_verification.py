@@ -43,6 +43,25 @@ def test_threshold_is_inclusive(monkeypatch):
     assert face.is_match(0.3001) is False
 
 
+# ------------------------------------------------------- pool multi-poses
+def test_best_distance_is_the_closest_pose():
+    probe = [1.0, 0.0]
+    pool = [[-1.0, 0.0], [0.0, 1.0], [1.0, 0.0001]]  # dont une quasi-identique
+    assert face.best_distance(probe, pool) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_best_distance_with_a_single_candidate_matches_cosine_distance():
+    probe, candidate = [0.3, 0.7], [0.1, -0.4]
+    assert face.best_distance(probe, [candidate]) == pytest.approx(
+        face.cosine_distance(probe, candidate)
+    )
+
+
+def test_required_poses_has_five_distinct_entries():
+    assert len(face.REQUIRED_POSES) == 5
+    assert len(set(face.REQUIRED_POSES)) == 5
+
+
 # ------------------------------------------------------------ images
 def test_jpeg_data_url_is_accepted():
     assert face.normalize_image(JPEG).startswith("data:image/jpeg;base64,")

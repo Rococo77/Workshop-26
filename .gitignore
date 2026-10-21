@@ -44,9 +44,13 @@ services/face-api/*.jpg
 services/face-api/*.jpeg
 services/face-api/*.png
 
+# Firmware ESP8266 (PlatformIO) : secrets Wi-Fi/jeton réels, jamais versionnés.
+firmware/*/include/secrets.h
+firmware/*/.pio/
+
 # Fichiers .MD
-CLAUDE.md 
-SUJET.md 
+CLAUDE.md
+SUJET.md
 
 
 # Sauvegardes PRA locales (jamais versionnées)

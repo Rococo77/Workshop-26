@@ -53,7 +53,8 @@ Couples SR/OV prioritaires retenus : **SR1→ER1** (DoS), **SR2→ER2/ER3**
 | Scénario | Mode opératoire | Vraisemblance |
 |----------|-----------------|---------------|
 | SS1 | Flood HTTP multi-thread sur `/api/*` jusqu'à saturation CPU/latence | **V3 — Vraisemblable** |
-| SS2 | Payloads SQLi (`' OR '1'='1`, UNION, pg_sleep) sur `/auth/login` | **V3 — Vraisemblable** |
+| SS2 | Payloads SQLi (`' OR '1'='1`, UNION, pg_sleep) sur `/auth/login`, `/api/auth/register` | **V3 — Vraisemblable** |
+| SS2bis | Credential stuffing / brute force sur `/auth/login` puis `/api/auth/login/face` (second facteur) ; création massive de faux comptes sur `/api/auth/register` | V2 — Possible |
 | SS3 | Accès au socket Docker, création/execution de conteneur privilégié, pivot | V2 — Possible |
 
 ## Atelier 5 — Traitement du risque
@@ -63,6 +64,7 @@ Couples SR/OV prioritaires retenus : **SR1→ER1** (DoS), **SR2→ER2/ER3**
 | SS1 (DoS) | Rate limiting WAF, détection ML `dos_flood`, **blocage IP automatique**, canari de reprise | Flood distribué (DDoS) non couvert : nécessiterait anti-DDoS amont |
 | SS2 (Injection) | Requêtes **paramétrées**, OWASP CRS (403), détection `injection_attempt`, confinement IP | 0-day CRS ; WAF en contournement si règle manquante |
 | SS3 (Abus automate) | Réseau `control` isolé, **allowlist** conteneurs/playbooks, pas d'UI admin exposée, socket non partagé aux services métier | Socket Docker = root-equivalent : en prod, RBAC/Operator + audit |
+| SS2bis (Stuffing / faux comptes) | Second facteur visage obligatoire (un mot de passe volé ne suffit pas), zone WAF dédiée 2 req/s (`/api/auth/register`, `/api/auth/login/face`), verrou après 5 échecs/15 min (visage), jeton intermédiaire `face_pending` de ~2 min sans accès métier | Le visage seul n'est pas un secret opposable (deepfake) : anti-spoofing (FasNet) atténue, pas d'authentification « vivante » garantie en démonstrateur |
 | ER3 (Exfiltration) | Pagination bornée, auth obligatoire, endpoint interne masqué (404), logs d'investigation | Fuite via canal légitime non détectée |
 
 ### Mesures transverses

@@ -7,6 +7,13 @@ limit_req_zone $binary_remote_addr zone=perip:10m rate=50r/s;
 limit_req_zone $binary_remote_addr zone=face:10m rate=2r/s;
 limit_req_status 429;
 
+# WebSocket (indicateur LED ESP8266, /api/ws/face-events) : upgrade HTTP ->
+# WS si le client le demande, connexion fermée sinon (comportement nginx standard).
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 # Résolution DNS à chaque requête : un service recréé change d'IP. Avec un nom
 # fixe dans proxy_pass, nginx le résolvait une seule fois au démarrage et
 # renvoyait ensuite 502, ou 404 si l'ancienne IP avait été réattribuée à un
@@ -71,17 +78,37 @@ server {
         proxy_read_timeout 10s;
     }
 
-    # Enrôlement et confirmation faciale : photo en base64 brut dans le JSON
-    # (bornée par la limite ModSecurity des corps sans fichier, 128 Ko),
-    # inférence DeepFace -> délai plus long. Regex : prioritaire sur /api/.
-    location ~ ^/api/(face/enrollment|transactions/[0-9]+/confirm)$ {
+    # Enrôlement, confirmation, auto-inscription (pool de 5 photos) et second
+    # facteur faciaux : photos en base64 brut dans le JSON, inférence DeepFace
+    # -> délai plus long et cible de force brute -> zone stricte. Limite de
+    # corps relevée UNIQUEMENT ici (5 photos ~60 Ko chacune en base64 ;
+    # 128 Ko par défaut suffit à 1 photo mais pas à 5) ; ailleurs, la limite
+    # reste stricte (anti-abus). Regex : prioritaire sur /api/.
+    location ~ ^/api/(face/enrollment|transactions/[0-9]+/confirm|auth/register|auth/login/face)$ {
         limit_req zone=face burst=5 nodelay;
+        client_max_body_size 400k;
+        modsecurity_rules 'SecRequestBodyNoFilesLimit 409600';
         rewrite ^/api/(.*)$ /$1 break;
         proxy_pass http://$up_api;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 40s;
+    }
+
+    # Relais temps réel des vérifications faciales (indicateur LED ESP8266,
+    # démo bonus) : connexion WebSocket longue durée, pas la zone stricte
+    # `face` (une seule connexion, pas un flux de requêtes HTTP répétées).
+    location = /api/ws/face-events {
+        limit_req zone=perip burst=5 nodelay;
+        rewrite ^/api/(.*)$ /$1 break;
+        proxy_pass http://$up_api;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 3600s;
     }
 
     # L'endpoint interne /internal ne doit JAMAIS être exposé via le WAF.

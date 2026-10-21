@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getAccounts, getFaceEnrollment, getTransactions, login } from "./api.js";
+import { getAccounts, getFaceEnrollment, getTransactions, login, loginFace, register } from "./api.js";
 import AccountCard from "./components/AccountCard.jsx";
+import ConsentModal from "./components/ConsentModal.jsx";
+import FaceCapture from "./components/FaceCapture.jsx";
 import FaceEnrollment from "./components/FaceEnrollment.jsx";
 import Guilloche from "./components/Guilloche.jsx";
 import History from "./components/History.jsx";
+import PoseCapture, { POSES } from "./components/PoseCapture.jsx";
 import TransferForm from "./components/TransferForm.jsx";
 import { StatusBanner, StatusPill, useServiceStatus } from "./components/ServiceStatus.jsx";
 import Supervision, { saveSupervisionToken } from "./Supervision.jsx";
@@ -17,10 +20,18 @@ export default function App() {
 
 function ClientApp() {
   const [session, setSession] = useState(null);
-  return session ? (
-    <Banking session={session} onLogout={() => setSession(null)} />
+  const [mode, setMode] = useState(window.location.pathname === "/register" ? "register" : "login");
+
+  const goTo = (next) => {
+    setMode(next);
+    window.history.replaceState(null, "", next === "register" ? "/register" : "/");
+  };
+
+  if (session) return <Banking session={session} onLogout={() => setSession(null)} />;
+  return mode === "register" ? (
+    <Register onRegistered={setSession} onGoToLogin={() => goTo("login")} />
   ) : (
-    <Login onLogin={setSession} />
+    <Login onLogin={setSession} onGoToRegister={() => goTo("register")} />
   );
 }
 
@@ -28,31 +39,8 @@ function Wordmark({ className = "" }) {
   return <span className={`text-xl font-bold tracking-tight ${className}`}>Alpha</span>;
 }
 
-function Login({ onLogin }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState(null);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setPending(true);
-    setError(null);
-    try {
-      const res = await login(username.trim(), password);
-      if (res.role !== "customer") {
-        // operator / admin : pas de comptes bancaires, leur espace est la supervision.
-        saveSupervisionToken(res.access_token);
-        window.location.assign("/supervision");
-        return;
-      }
-      onLogin({ token: res.access_token, username: username.trim() });
-    } catch (err) {
-      setError(err.message);
-      setPending(false);
-    }
-  };
-
+// Habillage commun aux écrans de connexion/inscription (bandeau + formulaire).
+function AuthShell({ title, subtitle, children, footer }) {
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
       <aside className="relative hidden overflow-hidden bg-petrol p-12 text-white lg:flex lg:flex-col">
@@ -72,51 +60,290 @@ function Login({ onLogin }) {
       <main className="flex flex-col px-6 py-10 sm:px-12">
         <Wordmark className="text-petrol lg:hidden" />
         <div className="m-auto w-full max-w-sm">
-          <h1 className="text-2xl font-semibold tracking-tight">Connexion à votre espace</h1>
-          <form onSubmit={submit} className="mt-8 space-y-5">
-            <div>
-              <label htmlFor="username" className="block text-sm font-medium">
-                Identifiant
-              </label>
-              <input
-                id="username"
-                className="field"
-                autoComplete="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium">
-                Mot de passe
-              </label>
-              <input
-                id="password"
-                type="password"
-                className="field"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            <button
-              disabled={pending}
-              className="w-full rounded-xl bg-petrol px-4 py-3 font-semibold text-white hover:bg-petrol-deep disabled:opacity-50"
-            >
-              {pending ? "Connexion…" : "Se connecter"}
-            </button>
-            <div aria-live="polite">
-              {error && <p className="rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
-            </div>
-          </form>
+          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+          {subtitle && <p className="mt-2 text-sm text-ink/70">{subtitle}</p>}
+          <div className="mt-8">{children}</div>
+          {footer}
         </div>
         <p className="mx-auto mt-10 max-w-sm text-center text-[13px] text-ink/50">
           Plateforme de paiement fictive du démonstrateur Resilience-Alpha. Aucun argent réel.
         </p>
       </main>
     </div>
+  );
+}
+
+function Login({ onLogin, onGoToRegister }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  // null = étape mot de passe ; sinon second facteur (jeton intermédiaire).
+  const [face, setFace] = useState(null);
+
+  const submitPassword = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await login(username.trim(), password);
+      if (res.pending_token) {
+        setFace({ token: res.pending_token, attempt: 0 });
+        return;
+      }
+      if (res.role !== "customer") {
+        // operator / admin : pas de comptes bancaires, leur espace est la supervision.
+        saveSupervisionToken(res.access_token);
+        window.location.assign("/supervision");
+        return;
+      }
+      onLogin({ token: res.access_token, username: username.trim() });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitFace = async (image) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await loginFace(face.token, image);
+      onLogin({ token: res.access_token, username: username.trim() });
+    } catch (err) {
+      setError(err.message);
+      setFace((f) => ({ ...f, attempt: f.attempt + 1 }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (face) {
+    return (
+      <AuthShell
+        title="Confirmez avec votre visage"
+        subtitle="Dernière étape : une photo de votre visage pour finaliser la connexion."
+      >
+        <FaceCapture
+          key={face.attempt}
+          busy={busy}
+          submitLabel="Se connecter"
+          onSubmit={submitFace}
+          onCancel={() => setFace(null)}
+        />
+        <div aria-live="polite">
+          {error && <p className="mt-4 rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
+        </div>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell
+      title="Connexion à votre espace"
+      footer={
+        <p className="mt-6 text-center text-sm text-ink/70">
+          Pas encore de compte ?{" "}
+          <button type="button" onClick={onGoToRegister} className="font-medium text-petrol hover:underline">
+            Créer un compte
+          </button>
+        </p>
+      }
+    >
+      <form onSubmit={submitPassword} className="space-y-5">
+        <div>
+          <label htmlFor="username" className="block text-sm font-medium">
+            Identifiant
+          </label>
+          <input
+            id="username"
+            className="field"
+            autoComplete="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+        </div>
+        <div>
+          <label htmlFor="password" className="block text-sm font-medium">
+            Mot de passe
+          </label>
+          <input
+            id="password"
+            type="password"
+            className="field"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </div>
+        <button
+          disabled={busy}
+          className="w-full rounded-xl bg-petrol px-4 py-3 font-semibold text-white hover:bg-petrol-deep disabled:opacity-50"
+        >
+          {busy ? "Connexion…" : "Se connecter"}
+        </button>
+        <div aria-live="polite">
+          {error && <p className="rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
+        </div>
+      </form>
+    </AuthShell>
+  );
+}
+
+function Register({ onRegistered, onGoToLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  // credentials -> consent (pop-up) -> photos (pool de 5 poses).
+  const [stage, setStage] = useState("credentials");
+  const [images, setImages] = useState({});
+  const [step, setStep] = useState(0);
+  const [retryKey, setRetryKey] = useState(0);
+
+  const submitCredentials = (e) => {
+    e.preventDefault();
+    setError(null);
+    if (password !== confirm) {
+      setError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    setStage("consent");
+  };
+
+  const resetToCredentials = () => {
+    setStage("credentials");
+    setImages({});
+    setStep(0);
+  };
+
+  const submitAll = async (allImages) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await register(username.trim(), password, true, allImages);
+      onRegistered({ token: res.access_token, username: username.trim() });
+    } catch (err) {
+      setError(err.message);
+      if (err.pose) {
+        // Une seule pose en cause : on ne refait que celle-là, les 4 autres
+        // photos déjà acceptées sont conservées.
+        const idx = POSES.findIndex((p) => p.key === err.pose);
+        setStep(idx >= 0 ? idx : 0);
+        setRetryKey((n) => n + 1);
+      } else {
+        // Erreur non liée à une pose (identifiant pris...) : retour au formulaire.
+        resetToCredentials();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onPhoto = (poseKey, image) => {
+    const next = { ...images, [poseKey]: image };
+    setImages(next);
+    if (Object.keys(next).length === POSES.length) {
+      submitAll(next);
+    } else {
+      setStep((s) => s + 1);
+    }
+  };
+
+  if (stage === "photos") {
+    return (
+      <AuthShell
+        title="Activez la validation par visage"
+        subtitle="Dernière étape : 5 photos sous différents angles protégeront votre compte (mot de passe + visage)."
+      >
+        <PoseCapture
+          step={step}
+          retryKey={retryKey}
+          busy={busy}
+          onPhoto={onPhoto}
+          onCancel={resetToCredentials}
+        />
+        <div aria-live="polite">
+          {error && <p className="mt-4 rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
+        </div>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <>
+      <AuthShell
+        title="Créer un compte"
+        footer={
+          <p className="mt-6 text-center text-sm text-ink/70">
+            Déjà un compte ?{" "}
+            <button type="button" onClick={onGoToLogin} className="font-medium text-petrol hover:underline">
+              Se connecter
+            </button>
+          </p>
+        }
+      >
+        <form onSubmit={submitCredentials} className="space-y-5">
+          <div>
+            <label htmlFor="new-username" className="block text-sm font-medium">
+              Identifiant
+            </label>
+            <input
+              id="new-username"
+              className="field"
+              autoComplete="username"
+              minLength={3}
+              maxLength={32}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="new-password" className="block text-sm font-medium">
+              Mot de passe
+            </label>
+            <input
+              id="new-password"
+              type="password"
+              className="field"
+              autoComplete="new-password"
+              minLength={10}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="confirm-password" className="block text-sm font-medium">
+              Confirmez le mot de passe
+            </label>
+            <input
+              id="confirm-password"
+              type="password"
+              className="field"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              required
+            />
+          </div>
+          <button className="w-full rounded-xl bg-petrol px-4 py-3 font-semibold text-white hover:bg-petrol-deep">
+            Continuer
+          </button>
+          <div aria-live="polite">
+            {error && <p className="rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
+          </div>
+        </form>
+      </AuthShell>
+      {stage === "consent" && (
+        <ConsentModal onAccept={() => setStage("photos")} onDecline={() => setStage("credentials")} />
+      )}
+    </>
   );
 }
 

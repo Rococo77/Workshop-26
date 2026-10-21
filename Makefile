@@ -53,5 +53,6 @@ train: ## (Ré)entraîne et évalue le modèle de détection
 test: ## Lance les tests
 	python3 -m pytest -q tests/
 
-enroll-face: ## Lie le visage d'une photo à un client : make enroll-face PHOTO=moi.jpg USER=jordan ARGS="--create --password X"
-	bash scripts/enroll-face.sh $(PHOTO) $(USER) $(ARGS)
+enroll-face: ## Enrôle le pool de 5 photos sur un client : make enroll-face USER=jordan PHOTO_RIGHT=r.jpg PHOTO_UP=u.jpg PHOTO_DOWN=d.jpg PHOTO_LEFT=l.jpg PHOTO_FACE=f.jpg ARGS="--create --password X --consent"
+	bash scripts/enroll-face.sh $(USER) --photo-right $(PHOTO_RIGHT) --photo-up $(PHOTO_UP) \
+		--photo-down $(PHOTO_DOWN) --photo-left $(PHOTO_LEFT) --photo-face $(PHOTO_FACE) $(ARGS)
