@@ -1,0 +1,73 @@
+---
+# ============================================================================
+#  Sauvegarde logique de la base de paiement (volet PCA/PRA, docs/pca-pra.md).
+#  Dump horodaté dans backups/, avec rétention. L'état métier vit dans
+#  PostgreSQL (volume pgdata) : c'est le seul élément à sauvegarder, le reste
+#  étant reconstruit par le code (Compose + Ansible).
+#
+#  Usage :
+#    ansible-playbook backup.yml
+#    ansible-playbook backup.yml -e retention=10
+# ============================================================================
+- name: Sauvegarde PostgreSQL
+  hosts: host
+  gather_facts: false
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    backup_dir: "{{ project_root }}/backups"
+    retention: 7            # nombre de sauvegardes conservées
+    pg_container: ra-postgres
+
+  tasks:
+    # Horodatage figé UNE fois : un lookup en `vars:` serait réévalué à chaque
+    # usage (la seconde peut changer entre l'écriture et le contrôle du fichier).
+    - name: Figer l'horodatage de la sauvegarde
+      ansible.builtin.set_fact:
+        ts: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+
+    - name: Créer le dossier de sauvegardes
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Vérifier que la base répond
+      ansible.builtin.command: >-
+        docker exec {{ pg_container }} sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+      changed_when: false
+
+    # Les identifiants viennent des variables d'environnement DU conteneur :
+    # aucun secret ne transite par la ligne de commande Ansible.
+    # --clean --if-exists : le dump porte les `DROP ... IF EXISTS` avant les
+    # `CREATE`, donc il est REJOUABLE sur une base déjà peuplée (restauration PRA
+    # idempotente, sans "relation already exists").
+    - name: Dump logique horodaté (rejouable)
+      ansible.builtin.shell: >-
+        docker exec {{ pg_container }} sh -c 'pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"'
+        > "{{ backup_dir }}/paymentdb_{{ ts }}.sql"
+      args:
+        chdir: "{{ project_root }}"
+      changed_when: true
+
+    - name: Vérifier que la sauvegarde n'est pas vide
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/paymentdb_{{ ts }}.sql"
+      register: dump
+
+    - name: Échec si sauvegarde vide
+      ansible.builtin.assert:
+        that:
+          - dump.stat.exists
+          - dump.stat.size | default(0) | int > 0
+        fail_msg: "La sauvegarde est vide — vérifier les logs de {{ pg_container }}."
+        success_msg: "Sauvegarde OK ({{ dump.stat.size }} octets)."
+
+    - name: Appliquer la rétention (ne garder que les N plus récentes)
+      ansible.builtin.shell: >-
+        ls -1t "{{ backup_dir }}"/paymentdb_*.sql 2>/dev/null
+        | tail -n +{{ retention + 1 }} | xargs -r rm -f --
+      changed_when: true
+
+    - name: Résumé
+      ansible.builtin.debug:
+        msg: "Sauvegarde : backups/paymentdb_{{ ts }}.sql ({{ dump.stat.size }} o, rétention={{ retention }})"

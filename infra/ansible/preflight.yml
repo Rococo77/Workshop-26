@@ -1,0 +1,68 @@
+---
+# ============================================================================
+#  Pré-vol : vérifie que le PC Hôte réunit les prérequis AVANT tout déploiement.
+#  But : éliminer le « ça marche sur ma machine » (critère de reproductibilité,
+#  sujet §3.2). Échoue tôt et clairement si un prérequis manque.
+#
+#  Usage :
+#    ansible-playbook preflight.yml
+#  (exécuté automatiquement par site.yml avant deploy.yml)
+# ============================================================================
+- name: Vérification des prérequis du PC Hôte
+  hosts: host
+  gather_facts: false
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+
+  tasks:
+    - name: Docker est installé et le démon répond
+      ansible.builtin.command: docker version
+      changed_when: false
+      register: docker_v
+      failed_when: docker_v.rc != 0
+
+    - name: Docker Compose v2 est disponible
+      ansible.builtin.command: docker compose version
+      changed_when: false
+      register: compose_v
+      failed_when: compose_v.rc != 0
+
+    - name: La collection Ansible community.docker est installée
+      ansible.builtin.command: ansible-galaxy collection list community.docker
+      changed_when: false
+      register: coll
+      failed_when: "'community.docker' not in coll.stdout"
+
+    - name: Détecter la présence de secrets chiffrés (SOPS)
+      ansible.builtin.stat:
+        path: "{{ project_root }}/secrets.enc.env"
+      register: enc
+
+    - name: SOPS est installé si des secrets chiffrés existent
+      ansible.builtin.command: sops --version
+      changed_when: false
+      register: sops_v
+      failed_when: sops_v.rc != 0
+      when: enc.stat.exists
+
+    - name: Un fichier d'environnement est disponible (.env ou secrets.enc.env)
+      ansible.builtin.stat:
+        path: "{{ project_root }}/.env"
+      register: envfile
+
+    - name: Refuser de continuer sans secrets ni .env
+      ansible.builtin.assert:
+        that:
+          - envfile.stat.exists or enc.stat.exists
+        fail_msg: >-
+          Aucun .env ni secrets.enc.env trouvé. Copier .env.example -> .env
+          (démo locale) ou fournir secrets.enc.env (SOPS).
+        success_msg: "Environnement présent."
+
+    - name: Synthèse
+      ansible.builtin.debug:
+        msg:
+          - "Docker        : OK"
+          - "Compose v2     : OK"
+          - "community.docker: OK"
+          - "Secrets        : {{ 'SOPS (chiffré)' if enc.stat.exists else '.env local' }}"

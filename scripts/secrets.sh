@@ -38,12 +38,14 @@ case "$cmd" in
     echo "Chiffré -> $ENC_FILE (versionnable)."
     ;;
   decrypt)
-    require sops
+    # Pas de fichier chiffré : repli sur le .env existant (ou .env.example) SANS
+    # exiger sops (voie démo locale). On n'exige sops que s'il y a à déchiffrer.
     if [[ ! -f "$ENC_FILE" ]]; then
-      echo "secrets.enc.env absent : repli sur .env.example (DÉMO UNIQUEMENT)." >&2
+      echo "secrets.enc.env absent : repli sur .env existant / .env.example (DÉMO)." >&2
       [[ -f "$PLAIN_FILE" ]] || cp "${ROOT}/.env.example" "$PLAIN_FILE"
       exit 0
     fi
+    require sops
     SOPS_AGE_KEY_FILE="$KEY_FILE" sops --decrypt --input-type dotenv --output-type dotenv \
       "$ENC_FILE" > "$PLAIN_FILE"
     echo "Déchiffré -> $PLAIN_FILE (ignoré par git)."
