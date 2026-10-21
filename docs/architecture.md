@@ -57,6 +57,38 @@ décision → remédiation → vérification**, sans intervention humaine.
    contrôle de solde, écriture transactionnelle) sur PostgreSQL.
 4. Chaque requête émet des métriques Prometheus (taux, latence, statut, métier).
 
+### 3.1 Validation faciale des virements (DeepFace)
+
+Un virement client n'est réglé qu'après reconnaissance du visage du titulaire.
+
+```
+front ──POST /transactions──▶ payment-api ── virement `pending` (5 min, 3 essais)
+front ──photo──▶ POST /transactions/{id}/confirm ▶ payment-api ──/represent──▶ face-api
+                                     distance cosinus ≤ 0,30 ? ──▶ règlement atomique
+```
+
+- **`face-api`** : API Flask officielle de [DeepFace](https://github.com/serengil/deepface)
+  (tag `v0.0.102`, commit vérifié au build), moteur **ONNX** : Facenet512
+  (empreinte 512 d), YuNet (détection), FasNet (anti-spoofing : photo d'écran
+  ou imprimée). Poids embarqués dans l'image.
+- **Isolement** : réseau `biometric` interne (seul `payment-api` y accède,
+  ni le WAF ni Internet) + jeton Bearer `FACE_API_TOKEN`.
+- **Décision dans `payment-api`** : DeepFace calcule l'empreinte, la
+  comparaison et le seuil sont maîtrisés côté métier. La distance est
+  journalisée (audit `face_verification_log`, logs Loki) mais **jamais renvoyée
+  au client** (pas d'oracle pour optimiser une image d'attaque).
+- **Minimisation (RGPD art. 9)** : aucune photo stockée, seulement le vecteur
+  d'empreinte (`face_enrollment`). Enrôlement unique, sans écrasement possible
+  par la seule connaissance du mot de passe.
+- **Anti force brute** : 3 essais par virement, verrou utilisateur après
+  5 échecs en 15 min (429), zone de rate-limit WAF dédiée (2 req/s).
+- **Disponibilité ≠ compromission** : `face-api` indisponible → 503, le
+  virement reste en attente (aucun essai consommé) ; le canari et `/ready` ne
+  dépendent pas de la biométrie.
+- Les fonds ne bougent qu'au règlement : solde re-contrôlé sous verrou, double
+  confirmation impossible (`FOR UPDATE` sur la ligne `pending`).
+- `FACE_CONFIRMATION_REQUIRED=false` restaure le règlement immédiat.
+
 La base, les secrets et les interfaces de gestion **ne sont pas publiés** sur le
 réseau pédagogique : seul le WAF (et Grafana pour l'observation jury) est exposé.
 

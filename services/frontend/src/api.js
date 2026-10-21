@@ -16,12 +16,33 @@ const DETAILS = {
   "source and destination must differ": "Vous ne pouvez pas vous virer de l'argent sur le même compte.",
   "amount must be positive": "Le montant doit être supérieur à zéro.",
   "invalid amount": "Montant invalide.",
+  "transaction expired": "Le délai de validation est dépassé : le virement a été annulé.",
+  "transaction cancelled": "Ce virement a déjà été annulé.",
+  "transaction face_mismatch": "Ce virement a été refusé après plusieurs échecs de reconnaissance.",
+  "transaction settled": "Ce virement a déjà été validé.",
+};
+
+// Validation faciale : l'API renvoie `detail: { code, attempts_left? }`.
+const FACE_CODES = {
+  face_not_enrolled: "Activez d'abord la validation par visage.",
+  already_enrolled: "Votre visage est déjà enregistré.",
+  face_reenrollment_required: "Votre visage doit être réenregistré. Contactez le support.",
+  face_mismatch: "Le visage ne correspond pas à celui enregistré.",
+  spoof: "Photo refusée : prenez-vous en direct, pas une photo ou un écran.",
+  no_face: "Aucun visage détecté. Placez votre visage bien en face, dans la lumière.",
+  multiple_faces: "Plusieurs visages détectés. Vous devez être seul sur la photo.",
+  invalid_image: "Image illisible. Reprenez la photo.",
+  image_too_large: "Image trop lourde. Reprenez la photo.",
+  face_locked: "Trop d'échecs de reconnaissance. Réessayez dans 15 minutes.",
+  face_unavailable: "La reconnaissance faciale est momentanément indisponible. Réessayez.",
 };
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, { code = null, attemptsLeft = null } = {}) {
     super(message);
     this.status = status;
+    this.code = code;
+    this.attemptsLeft = attemptsLeft;
   }
 }
 
@@ -41,6 +62,13 @@ async function request(path, { token, method = "GET", body } = {}) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    const code = typeof data.detail?.code === "string" ? data.detail.code : null;
+    if (code) {
+      throw new ApiError(FACE_CODES[code] || MESSAGES[res.status] || "Opération refusée.", res.status, {
+        code,
+        attemptsLeft: data.detail.attempts_left ?? null,
+      });
+    }
     const detail = typeof data.detail === "string" ? data.detail : null;
     throw new ApiError(DETAILS[detail] || MESSAGES[res.status] || "Opération refusée.", res.status);
   }
@@ -60,6 +88,19 @@ export const getTransactions = (token) => request("/api/transactions?limit=30", 
 
 export const createTransaction = (token, payload) =>
   request("/api/transactions", { token, method: "POST", body: payload });
+
+// Photos en base64 BRUT : le préfixe `data:image/...;base64,` déclenche
+// plusieurs règles OWASP CRS du WAF (data scheme, XSS, RCE).
+export const confirmTransaction = (token, id, image) =>
+  request(`/api/transactions/${id}/confirm`, { token, method: "POST", body: { image } });
+
+export const cancelTransaction = (token, id) =>
+  request(`/api/transactions/${id}/cancel`, { token, method: "POST" });
+
+export const getFaceEnrollment = (token) => request("/api/face/enrollment", { token });
+
+export const enrollFace = (token, image) =>
+  request("/api/face/enrollment", { token, method: "POST", body: { image } });
 
 // Public : ok / perturbé, pour la pastille de l'espace client.
 export const getStatus = () => request("/supervision/status");

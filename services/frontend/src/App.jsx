@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getAccounts, getTransactions, login } from "./api.js";
+import { getAccounts, getFaceEnrollment, getTransactions, login } from "./api.js";
 import AccountCard from "./components/AccountCard.jsx";
+import FaceEnrollment from "./components/FaceEnrollment.jsx";
 import Guilloche from "./components/Guilloche.jsx";
 import History from "./components/History.jsx";
 import TransferForm from "./components/TransferForm.jsx";
@@ -124,6 +125,8 @@ function Banking({ session, onLogout }) {
   const [accounts, setAccounts] = useState(null);
   const [transactions, setTransactions] = useState(null);
   const [lastFailureAt, setLastFailureAt] = useState(0);
+  // null = inconnu : on affiche le formulaire, l'API redemande l'enrôlement si besoin.
+  const [faceEnrolled, setFaceEnrolled] = useState(null);
   const status = useServiceStatus(lastFailureAt);
 
   const onFailure = useCallback(
@@ -150,11 +153,17 @@ function Banking({ session, onLogout }) {
     return () => clearInterval(id);
   }, [refresh]);
 
+  useEffect(() => {
+    getFaceEnrollment(token)
+      .then((f) => setFaceEnrolled(!f.required || f.enrolled))
+      .catch(onFailure);
+  }, [token, onFailure]);
+
   const account = accounts?.[0];
   const recentIbans = useMemo(() => {
     const seen = new Set();
     for (const t of transactions || []) {
-      if (t.outgoing && !t.is_canary) seen.add(t.dst_iban);
+      if (t.outgoing && !t.is_canary && t.status === "settled") seen.add(t.dst_iban);
     }
     return [...seen].slice(0, 3);
   }, [transactions]);
@@ -183,13 +192,18 @@ function Banking({ session, onLogout }) {
           </div>
         </div>
         <div className="space-y-10">
-          <TransferForm
-            token={token}
-            account={account}
-            recentIbans={recentIbans}
-            onSent={refresh}
-            onFailure={onFailure}
-          />
+          {faceEnrolled === false ? (
+            <FaceEnrollment token={token} onEnrolled={() => setFaceEnrolled(true)} onFailure={onFailure} />
+          ) : (
+            <TransferForm
+              token={token}
+              account={account}
+              recentIbans={recentIbans}
+              onSent={refresh}
+              onFailure={onFailure}
+              onEnrollmentRequired={() => setFaceEnrolled(false)}
+            />
+          )}
           <div className="lg:hidden">
             <History transactions={transactions} />
           </div>
