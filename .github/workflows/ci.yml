@@ -4,13 +4,18 @@ name: CI/CD — Resilience-Alpha
 # → staging → E2E → validation → prod → validation). Adaptée au contexte :
 # démonstrateur local (pas de cloud), donc les étapes de déploiement cloud sont
 # des jobs DOCUMENTÉS, et le vrai test d'intégration rejoue la chaîne de
-# résilience (attaque → détection → remédiation → canari) à chaque push.
+# résilience (attaque → détection → remédiation → canari).
 
 on:
+  # La VALIDATION (statique, tests, build, scan, e2e) tourne sur les pull
+  # requests uniquement : un push de branche n'ouvre plus un second run en
+  # double de celui de la PR. Le `push` ne déclenche la CI que sur `main`
+  # (après merge d'une PR) pour la publication des images et le déploiement,
+  # jobs gardés par `if: github.ref == 'refs/heads/main'`.
   push:
-    branches: [main, dev, develop, "resilience-alpha", "release/**", "hotfix/**"]
+    branches: [main]
   pull_request:
-    branches: [main, dev, develop]
+    branches: [main, dev]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
