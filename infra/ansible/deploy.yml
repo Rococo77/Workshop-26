@@ -12,6 +12,11 @@
     with_ai: false  # true pour démarrer aussi Ollama + assistant RAG
     # Qwen3 4B par défaut ; 8B : -e ollama_model=hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M
     ollama_model: "hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M"
+    # true  : Ansible lance `docker compose up` (hôte Linux + Docker Engine).
+    # false : le déploiement est fait par `docker compose` CÔTÉ WINDOWS (Docker
+    #         Desktop ne monte pas les bind-mounts depuis une distro WSL). Ansible
+    #         se contente alors de vérifier (/api/ready) et de durcir.
+    deploy_via_ansible: true
 
   tasks:
     - name: Vérifier la présence de Docker
@@ -43,12 +48,19 @@
           - enc_secrets.stat.exists or env_present.stat.exists
         fail_msg: "Ni secrets.enc.env ni .env : copier .env.example -> .env."
 
+    - name: "Note : déploiement délégué à Docker Compose (Windows)"
+      ansible.builtin.debug:
+        msg: >-
+          deploy_via_ansible=false : le `docker compose up` est fait côté Windows.
+          Ansible vérifie seulement l'état et applique le durcissement.
+      when: not (deploy_via_ansible | bool)
+
     - name: Construire et démarrer la plateforme (cœur)
       community.docker.docker_compose_v2:
         project_src: "{{ project_root }}"
         build: always
         state: present
-      when: not with_ai
+      when: not with_ai and (deploy_via_ansible | bool)
 
     # Ollama sur GPU NVIDIA si Docker peut l'utiliser, sinon CPU (même test
     # que scripts/up-ai.sh : réserver un GPU absent ferait échouer le compose).
@@ -61,7 +73,7 @@
       register: gpu_probe
       changed_when: false
       failed_when: false
-      when: with_ai
+      when: with_ai and (deploy_via_ansible | bool)
 
     - name: Construire et démarrer la plateforme (cœur + IA)
       community.docker.docker_compose_v2:
@@ -70,7 +82,7 @@
         build: always
         state: present
         profiles: ["ai"]
-      when: with_ai
+      when: with_ai and (deploy_via_ansible | bool)
 
     - name: Attendre que l'API métier soit prête
       ansible.builtin.uri:

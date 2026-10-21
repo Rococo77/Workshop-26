@@ -76,6 +76,12 @@ Resources → WSL Integration, ou `integratedWslDistros: ["UbuntuRA"]` dans
 wsl -d UbuntuRA
 git config --global --add safe.directory /mnt/c/Users/<user>/Desktop/Workshop-26
 cd /mnt/c/Users/<user>/Desktop/Workshop-26/infra/ansible
+# --- Windows + Docker Desktop (RECOMMANDÉ) : Compose déploie, Ansible vérifie ---
+#   1) déployer côté PowerShell :  docker compose up -d --build
+#   2) vérifier + durcir (WSL)   :  site.yml en sautant le deploy Ansible :
+ansible-playbook -i inventory.ini site.yml -e deploy_via_ansible=false
+
+# --- Hôte Linux + Docker Engine : chaîne complète (deploy Ansible inclus) ---
 # Point d'entrée unique : prérequis -> déploiement -> vérifs de posture
 ansible-playbook -i inventory.ini site.yml                   # cœur + vérifications
 ansible-playbook -i inventory.ini site.yml -e with_ai=true   # + IA (modèles Ollama)
