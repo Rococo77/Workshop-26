@@ -33,31 +33,31 @@
       register: coll
       failed_when: "'community.docker' not in coll.stdout"
 
-    - name: Détecter la présence de secrets chiffrés (SOPS)
+    - name: Détecter un coffre Vault initialisé
       ansible.builtin.stat:
-        path: "{{ project_root }}/secrets.enc.env"
-      register: enc
+        path: "{{ project_root }}/.vault/init.json"
+      register: vault_init
 
-    - name: SOPS est installé si des secrets chiffrés existent
-      ansible.builtin.command: sops --version
+    - name: Le conteneur Vault existe si le coffre est initialisé
+      ansible.builtin.command: docker inspect ra-vault
       changed_when: false
-      register: sops_v
-      failed_when: sops_v.rc != 0
-      when: enc.stat.exists
+      register: vault_ctr
+      failed_when: vault_ctr.rc != 0
+      when: vault_init.stat.exists
 
-    - name: Un fichier d'environnement est disponible (.env ou secrets.enc.env)
+    - name: Un fichier d'environnement est disponible (.env ou Vault)
       ansible.builtin.stat:
         path: "{{ project_root }}/.env"
       register: envfile
 
-    - name: Refuser de continuer sans secrets ni .env
+    - name: Refuser de continuer sans secrets
       ansible.builtin.assert:
         that:
-          - envfile.stat.exists or enc.stat.exists
+          - envfile.stat.exists or vault_init.stat.exists
         fail_msg: >-
-          Aucun .env ni secrets.enc.env trouvé. Copier .env.example -> .env
-          (démo locale) ou fournir secrets.enc.env (SOPS).
-        success_msg: "Environnement présent."
+          Ni Vault initialisé ni .env. Lancer scripts/vault.sh init (Vault) ou,
+          en démo locale sans Vault, copier .env.example -> .env.
+        success_msg: "Secrets disponibles."
 
     - name: Synthèse
       ansible.builtin.debug:
@@ -65,4 +65,4 @@
           - "Docker        : OK"
           - "Compose v2     : OK"
           - "community.docker: OK"
-          - "Secrets        : {{ 'SOPS (chiffré)' if enc.stat.exists else '.env local' }}"
+          - "Secrets        : {{ 'Vault (.env rendu au déploiement)' if vault_init.stat.exists else '.env local' }}"

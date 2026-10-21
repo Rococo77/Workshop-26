@@ -13,31 +13,24 @@ cinq domaines imposés autour d'une seule boucle : **attaque → détection →
 décision → remédiation → vérification**, sans intervention humaine.
 
 ```
-                         PC ATTAQUANT (réseau du groupe 192.168.137.0/24)
-                                   │  flood / sqli / exfil
-                                   ▼
-┌───────────────────────────── PC HÔTE (Docker) ──────────────────────────────┐
-│                                                                              │
-│   [edge]        ┌────────── WAF (ModSecurity + OWASP CRS) ──────────┐        │
-│   8080  ───────▶│  reverse proxy durci · rate limit · blocklist dyn.│        │
-│                 └───┬───────────────┬────────────────┬─────────────┘        │
-│   [app]             ▼               ▼                ▼                       │
-│              frontend React   payment-api (API)   auth (JWT)   supervision-bff │
-│                                     │   │                              │      │
-│   [data]                            ▼   ▼                              │      │
-│                                 PostgreSQL (interne, non exposé)       │      │
-│                                                                        │      │
-│   [obs]   Prometheus ── Loki ── Promtail ── Grafana  ◀── métriques/logs│      │
-│                 │                                                      │      │
-│                 ▼ (features)                                           │      │
-│   ml-detector (IsolationForest + corrélation SIEM)                     │      │
-│                 │ incident (jeton interne)                             │      │
-│   [control]     ▼                                                      │      │
-│          remediation-engine (non-root) ─▶ docker-socket-proxy (filtré) ─▶ restart │
-│                             └─▶ WAF (block IP) · canari  — voir docs/durcissement.md │
-│                                                                              │
-│   [ai]    ollama + rag-assistant (LangChain) — assistant opérateur, read-only │
-└──────────────────────────────────────────────────────────────────────────────┘
+        PC ATTAQUANT                    point d'accès RESILIENCE-G1 (192.168.137.0/24)
+   flood / sqli / exfil ──┐                    ESP8266 (LED) ──WebSocket──┐
+                          ▼                                               ▼
+┌───────────────────────────── PC HÔTE (Docker) ─────────────────────────────────┐
+│ [edge]   WAF ModSecurity + OWASP CRS · rate limit · blocklist   :8080 (EDGE_BIND)│
+│            │ /             │ /api, /api/ws        │ /auth        │ /supervision  │
+│ [app]    frontend      payment-api ──────────── auth (JWT)    supervision-bff    │
+│                          │      │                   │                │          │
+│ [biometric]              │   face-api (DeepFace)    │                │          │
+│ [data]                   └──── PostgreSQL ──────────┘                │          │
+│                                                                      │          │
+│ [obs]    waf-metrics · Prometheus · Promtail · Loki · Grafana :3000 ◀┘          │
+│                 │ features + journaux                                           │
+│ [control]  ml-detector ──incident──▶ remediation-engine ──▶ docker-socket-proxy │
+│                                        │  block IP (WAF) · restart · canari      │
+│ [secrets]  Vault 127.0.0.1:8201 ──(rendu du .env au déploiement)                │
+│ [app]      ollama + rag-assistant (profil ai, lecture seule) 127.0.0.1:8200     │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 2. Les cinq domaines et leur interconnexion
@@ -47,7 +40,7 @@ décision → remédiation → vérification**, sans intervention humaine.
 | **Développement** | `payment-api`, `auth`, `frontend` (React/Tailwind), `supervision-bff` | Produit les signaux (métriques) ; le front rend l'état avant/pendant/après ; la transaction canari prouve la reprise |
 | **Infrastructure** | `docker-compose.yml`, playbooks Ansible, Prometheus/Grafana/Loki/Promtail | Déploiement reproductible ; l'observabilité alimente la détection |
 | **IA / Data** | `ml-detector` (IsolationForest), `rag-assistant` (Ollama+LangChain) | Le modèle **déclenche** la remédiation ; l'assistant aide l'opérateur (sans privilège) |
-| **Cybersécurité** | WAF ModSecurity+CRS, corrélation SIEM (Loki), secrets SOPS/age, durcissement | Le WAF bloque/trace ; le SIEM qualifie l'attaque et fournit l'IP source |
+| **Cybersécurité** | WAF ModSecurity+CRS, corrélation SIEM (Loki), secrets HashiCorp Vault, durcissement | Le WAF bloque/trace ; le SIEM qualifie l'attaque et fournit l'IP source |
 | **Gouvernance** | EBIOS RM, PCA/PRA, analyse NIS2/DORA | Justifie les services critiques, les objectifs de reprise, les arbitrages |
 
 ## 3. Flux métier nominal
@@ -188,8 +181,11 @@ Points clés de conception :
 
 ## 6. Sécurité et durcissement
 
-- **Segmentation réseau** : `edge` (WAF) / `app` / `data` (interne) / `obs` /
-  `control` (remédiation isolée). La base n'est accessible que depuis `app`.
+- **Segmentation réseau** (7 réseaux) : `edge` (WAF, seul publié) / `app`
+  (interne) / `data` (interne, PostgreSQL) / `biometric` (interne, `face-api`
+  joignable par `payment-api` seul) / `obs` / `control` (interne, remédiation
+  et proxy Docker) / `secrets` (Vault seul). La base n'est accessible que
+  depuis `payment-api` et `auth`. Matrice complète : [schéma Réseaux](diagrams/README.md).
 - **WAF** : ModSecurity + OWASP CRS (blocage réel), rate limiting par IP,
   en-têtes de durcissement, blocklist dynamique pilotée par la remédiation.
 - **Moindre privilège de l'automate** : le moteur de remédiation a besoin du
@@ -198,14 +194,14 @@ Points clés de conception :
   redémarrée automatiquement) et une allowlist de playbooks.
 - **Assistant IA sans privilège** : le RAG lit un corpus documentaire en lecture
   seule ; il ne peut pas agir sur le système et est distinct de l'automate.
-- **Secrets** : aucun secret en clair (SOPS + age ; `.env` ignoré par git).
+- **Secrets** : aucun secret en clair. HashiCorp Vault est la source de vérité ; le `.env` est rendu au déploiement par un jeton en lecture seule et ignoré par git (`docs/vault.md`).
   Requêtes SQL **paramétrées**, validation d'entrées (Pydantic), pas de secret
   dans les logs, messages d'erreur sans oracle.
 
 ## 7. Du démonstrateur à l'industriel (arbitrages)
 
 - Front : mode dev Vite pour la démo → build statique servi par nginx en prod.
-- Secrets : SOPS/age (léger) → HashiCorp Vault (rotation, baux dynamiques).
+- Secrets : Vault nœud unique, descellement manuel → cluster Raft, auto-unseal (KMS/HSM), secrets dynamiques et lecture directe par les services (AppRole).
 - Inférence LLM : Ollama (démo, CPU/GPU) → vLLM/TGI derrière une API
   OpenAI-compatible en production (débit, batching continu).
 - Remédiation : socket Docker → orchestrateur avec RBAC (Kubernetes + Operator),
@@ -217,3 +213,7 @@ Points clés de conception :
   dernière utilisation et job planifié supprimant le pool d'empreintes
   2 ans après la dernière connexion/confirmation (politique annoncée à
   l'utilisateur dès l'inscription, voir §3.1).
+
+## 8. Schémas (draw.io)
+
+Liste et liens : [docs/diagrams/README.md](diagrams/README.md).

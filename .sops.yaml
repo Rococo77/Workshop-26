@@ -1,6 +1,0 @@
-# Règles SOPS. Remplacer la clé publique age par celle générée via
-# `scripts/secrets.sh init`. Seuls les détenteurs de la clé privée (age.key,
-# non versionnée) peuvent déchiffrer `secrets.enc.env`.
-creation_rules:
-  - path_regex: secrets\.enc\.env$
-    age: "age1exemple_remplacer_par_votre_cle_publique_age_xxxxxxxxxxxxxxxxxxxx"

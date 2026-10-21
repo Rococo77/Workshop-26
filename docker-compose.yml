@@ -46,6 +46,9 @@ networks:
     internal: true
   biometric:
     internal: true
+  # Coffre Vault isolé : aucun autre service n'y est rattaché. Non `internal`
+  # uniquement pour publier son port sur 127.0.0.1 (administration locale).
+  secrets:
 
 volumes:
   pgdata:
@@ -55,6 +58,7 @@ volumes:
   ollama-data:
   waf-dynamic:
   waf-logs:
+  vault-data:
 
 services:
   # ----------------------------------------------------------------- WAF (edge)
@@ -467,6 +471,37 @@ services:
     logging: *default-logging
     labels:
       ra.role: "remediation"
+
+  # ------------------------------------------------- Coffre des secrets (Vault)
+  # Source de vérité des secrets (sujet §3.4). Les services ne l'interrogent
+  # PAS au démarrage : le .env est rendu depuis Vault au déploiement
+  # (scripts/vault.sh render, Ansible). Ainsi un Vault scellé n'empêche jamais
+  # le moteur de remédiation de relancer un service pendant un incident.
+  vault:
+    <<: *sec
+    image: hashicorp/vault:2.1.2
+    container_name: ra-vault
+    restart: unless-stopped
+    command: server
+    environment:
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    volumes:
+      - ./infra/vault/vault.hcl:/vault/config/vault.hcl:ro
+      - vault-data:/vault/file
+    ports:
+      # Interface d'administration : TOUJOURS locale au PC Hôte (§4).
+      - "127.0.0.1:8201:8200"
+    networks: [secrets]
+    # Sain = descellé (`vault status` sort en 2 si scellé).
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    logging: *default-logging
+    labels:
+      ra.role: "secrets"
 
   # ----------------------------------------------------- Assistant IA (RAG)
   # Profil `ai` : démarrage à la demande (RAM). Ollama peut tourner sur le

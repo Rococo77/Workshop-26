@@ -99,13 +99,16 @@ n'est jamais dans la boucle de reprise live.
 
 ## 3. Secrets
 
+HashiCorp Vault est la source de vérité ; le `.env` n'en est qu'un rendu.
 ```bash
-scripts/secrets.sh init      # génère la clé age (une fois) ; MAJ .sops.yaml
-# éditer .env puis :
-scripts/secrets.sh encrypt   # .env -> secrets.enc.env (versionnable)
-scripts/secrets.sh decrypt   # secrets.enc.env -> .env (local)
+scripts/vault.sh init     # 1re fois : init, descellement, KV, audit, politique, import du .env
+scripts/vault.sh unseal   # après tout redémarrage de Vault (il repart scellé)
+scripts/vault.sh import   # après modification d'un secret dans .env
+scripts/vault.sh render   # Vault -> .env (fait aussi par Ansible deploy.yml)
+scripts/vault.sh status
 ```
-`age.key` et `.env` ne sont **jamais** versionnés (cf. `.gitignore`).
+`.vault/` (clé de descellement, jetons) et `.env` ne sont **jamais** versionnés.
+Interface d'administration : http://127.0.0.1:8201 (locale uniquement). Détails : `docs/vault.md`.
 
 ## 4. Vérification de l'état utilisable
 
@@ -117,7 +120,29 @@ docker exec ra-payment-api python -c "import urllib.request;print(urllib.request
 ```
 Interfaces :
 - Front + dashboard : http://127.0.0.1:8080
-- Grafana : http://127.0.0.1:3000 (admin / cf. `.env`)
+- Grafana : http://127.0.0.1:3000/d/resilience-overview (admin / cf. `.env`) —
+  état, cycle attaque/détection/remédiation, service métier, journaux corrélés
+- Vault : http://127.0.0.1:8201 (local uniquement)
+
+### Mise à niveau d'une base existante (migrations 03 à 06)
+
+Les scripts de `services/payment-api/db/init/` ne sont exécutés par PostgreSQL
+**qu'à la création du volume `pgdata`**. Sur une base créée avant leur ajout,
+les rejouer à la main (tous idempotents) :
+```bash
+for f in 03_face_verification 04_auth_self_service 05_biometric_pool 06_canary_accounts; do
+  docker exec -i ra-postgres psql -U payuser -d paymentdb < services/payment-api/db/init/$f.sql
+done
+```
+| Script | Apport |
+|---|---|
+| `03_face_verification.sql` | virements `pending` + journal de vérification faciale |
+| `04_auth_self_service.sql` | auto-inscription, jeton intermédiaire `face_pending` |
+| `05_biometric_pool.sql` | pool de 5 empreintes + consentement. **Détruit les enrôlements à l'ancien format** : réenrôlement nécessaire |
+| `06_canary_accounts.sql` | comptes canari dédiés `_canary_src`/`_canary_dst` |
+
+Symptôme d'une migration manquante : canari en 503 (`column ... does not
+exist` ou `source account not found`) dans `docker logs ra-payment-api`.
 
 Comptes d'exploitation de démonstration (fictifs, mot de passe seul, pas de
 virement) : `operator`/`Operator#2026`, `admin`/`Admin#2026`.
@@ -166,10 +191,26 @@ Autres scénarios : `attack/sqli.py`, `attack/exfil.py` (voir `attack/README.md`
 
 ## 6. Chaos engineering (répétition jeudi)
 
-Provoquer une panne pour valider le playbook `service_unavailable` :
+**Scénario catastrophe** : les trois attaques (flood, injection SQL,
+exfiltration) frappent en même temps ; le script affiche en direct le score
+ML, la décision, la remédiation et le canari, puis le délai de détection et
+de reprise prouvée.
+```bash
+scripts/chaos.sh                                   # répétition locale (cible 127.0.0.1:8080, 45 s)
+scripts/chaos.sh http://192.168.137.1:8080 60      # depuis le PC Attaquant, 60 s
+```
+Les lectures d'état passent par `docker exec` : lancer le script sur le PC
+Hôte, ou ne garder que les attaques depuis le PC Attaquant et suivre la reprise
+dans Grafana.
+
+Panne franche pour valider le playbook `service_unavailable` :
 ```bash
 docker kill ra-payment-api     # le détecteur voit up==0 -> restart auto -> canari
 ```
+
+> Sous Docker Desktop, toutes les requêtes arrivent avec l'IP de la passerelle
+> Docker : le blocage d'IP ne se constate (`IP bloquées` > 0) qu'avec un vrai
+> PC Attaquant sur 192.168.137.0/24.
 
 ## 7. Dépannage
 
@@ -184,14 +225,11 @@ docker kill ra-payment-api     # le détecteur voit up==0 -> restart auto -> can
 | Virement : « visage non reconnu » systématique | éclairage / enrôlement de mauvaise qualité | réenrôler (voir ci-dessous) ; seuil `FACE_MATCH_THRESHOLD` |
 | `face_unavailable` (503) | `face-api` arrêtée | `docker compose logs face-api` ; le virement reste en attente 5 min |
 
-### Validation faciale : migration et réenrôlement
+### Validation faciale : enrôlement et réenrôlement
+
+Base existante : voir « Mise à niveau d'une base existante » (§4).
 
 ```bash
-# Base existante (créée avant le pool multi-poses) : script idempotent.
-# ATTENTION : reconstruit face_enrollment (passage 1 empreinte -> pool de 5) ;
-# tous les clients déjà enrôlés doivent se réenrôler après cette migration.
-docker exec -i ra-postgres psql -U payuser -d paymentdb < services/payment-api/db/init/05_biometric_pool.sql
-
 # Lier un pool de 5 photos (droite, haut, bas, gauche, face) à un client
 # depuis des fichiers (opérateur, hors parcours web ; un client normal passe
 # par l'auto-inscription, voir §4 ci-dessus). --consent atteste que le
@@ -226,14 +264,19 @@ le WAF (`/api/ws/face-events`, jeton `ESP_EVENTS_TOKEN`) et affiche en
 temps réel le résultat de chaque vérification faciale (connexion, virement) :
 verte = reconnu, rouge = refusé.
 
+Flash depuis le PC Hôte (Git Bash côté Windows : WSL ne voit pas les ports
+série USB). Le script génère `include/secrets.h` depuis le `.env`
+(`ESP_WIFI_SSID`, `ESP_WIFI_PASSWORD`, `ESP_EVENTS_TOKEN`, `EDGE_PORT` ; IP du
+PC Hôte et port série CH340 détectés, surchargeables par `ESP_WS_HOST` /
+`ESP_SERIAL_PORT`), compile puis flashe :
 ```bash
-cd firmware/face-led
-cp include/secrets.example.h include/secrets.h   # Wi-Fi + hôte/port WAF + jeton
-pio run -t upload --upload-port COM5             # flash (adapter le port)
-pio device monitor -b 115200                     # logs (Wi-Fi, WS, événements)
+scripts/flash-esp.sh               # génère, compile, flashe
+scripts/flash-esp.sh --build-only  # compile seulement
+pio device monitor -d firmware/face-led -b 115200   # logs (Wi-Fi, WS, événements)
 ```
+Jour de la démo : `ESP_WIFI_SSID=RESILIENCE-G1` et `ESP_WS_HOST=192.168.137.1`.
 
-## 8. Sauvegarde & restauration (PCA/PRA)
+## 9. Sauvegarde & restauration (PCA/PRA)
 
 ```bash
 cd infra/ansible
@@ -248,7 +291,7 @@ Une sauvegarde n'a de valeur que si la restauration est **prouvée** : `restore.
 échoue si `/api/ready` ne repasse pas à 200 après restauration. Les fichiers
 `backups/*.sql` ne sont pas versionnés (cf. `.gitignore`).
 
-## 9. Arrêt / remise à zéro
+## 10. Arrêt / remise à zéro
 
 ```bash
 docker compose --profile ai down      # arrêt
