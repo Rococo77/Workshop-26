@@ -144,10 +144,7 @@ démon partagent la même vue du système de fichiers**, à cause des *bind-moun
 de fichiers de conf (`prometheus.yml`, etc.).
 
 ### Windows + Docker Desktop (configuration de la démo) — **RECOMMANDÉ**
-Le démon Docker vit dans la distro `docker-desktop` : un `docker compose` lancé
-depuis une **autre** distro WSL lui demande de monter des fichiers à des chemins
-qu'il ne voit pas → `error mounting ... to rootfs`. On déploie donc **côté
-Windows**, et Ansible fait le reste :
+On déploie **côté Windows** avec Compose, et Ansible (depuis WSL) fait le reste :
 ```powershell
 docker compose up -d --build              # 1) déploie (PowerShell)
 ```
@@ -157,6 +154,19 @@ ansible-playbook -i inventory.ini site.yml -e deploy_via_ansible=false
 ```
 Le drapeau **`deploy_via_ansible=false`** fait sauter l'étape `docker compose up`
 d'Ansible tout en conservant la vérif `/api/ready` et le durcissement.
+
+> **Pourquoi pas le `docker compose up` d'Ansible depuis WSL ?** Les bind-mounts
+> de fichiers de conf (`prometheus.yml`, etc.) échouent (`error mounting ... to
+> rootfs`). Le démon Docker vit dans la distro `docker-desktop` ; pour qu'un
+> `docker compose` lancé depuis une autre distro traduise les chemins vers la vue
+> du démon, Docker Desktop doit y lancer son **proxy d'intégration**
+> (`/var/run/docker.sock`). Or ce proxy n'est provisionné que pour les distros
+> **installées via le Microsoft Store**, pas pour celles créées par
+> `wsl --import`. Notre `UbuntuRA` étant importée, le proxy est absent → les
+> bind-mounts ne se traduisent pas. Ce n'est **pas** un bug des playbooks : les
+> autres (preflight/harden/backup/restore/ops) n'utilisent pas de bind-mount et
+> fonctionnent depuis WSL. Pour obtenir le deploy Ansible natif sous Windows+DD,
+> installer Ubuntu **via le Store** (DD l'intègre alors automatiquement).
 
 > Prérequis WSL : voir [runbook.md](runbook.md) §2 Option C (import d'une Ubuntu,
 > `apt install ansible`, intégration Docker Desktop). Lancer les playbooks avec
