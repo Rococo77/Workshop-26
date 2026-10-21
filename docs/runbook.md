@@ -30,18 +30,44 @@ make ps          # état des conteneurs
 Make n'est pas installé par défaut sous Windows : utiliser l'option A dans ce cas.
 
 ### Option C — Ansible (reproductible, nécessite WSL sous Windows)
+
+**Installation de WSL Ubuntu + Ansible (une fois, sur le PC Hôte)** — la distro
+`docker-desktop` ne suffit pas (pas d'Ansible). Méthode fiable par import de
+rootfs (évite l'écran interactif) :
+```powershell
+# 1) Importer une Ubuntu 24.04 propre (rootfs officiel Canonical)
+#    https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-24.04lts.rootfs.tar.gz
+wsl --import UbuntuRA C:\Users\<user>\WSL\UbuntuRA <chemin>\ubuntu-noble-...rootfs.tar.gz
+# 2) Installer Ansible dans la distro
+wsl -d UbuntuRA -u root -- bash -lc "apt-get update && apt-get install -y ansible git"
+```
+Activer l'**intégration WSL de Docker Desktop** pour `UbuntuRA` (Settings →
+Resources → WSL Integration, ou `integratedWslDistros: ["UbuntuRA"]` dans
+`%APPDATA%\Docker\settings.json` puis redémarrer Docker Desktop).
+
+> Si `docker` reste injoignable dans la distro (socket `/var/run/docker.sock`
+> absent), pointer le client sur le socket partagé de Docker Desktop :
+> ```bash
+> echo 'export DOCKER_HOST=unix:///mnt/wsl/docker-desktop/shared-sockets/guest-services/docker.sock' \
+>   | sudo tee /etc/profile.d/docker-host.sh
+> ```
+
+**Lancement des playbooks** (le dépôt est vu sous `/mnt/c/...` ; `ansible.cfg`
+étant sur un montage *world-writable*, passer l'inventaire avec `-i`) :
 ```bash
-cd infra/ansible
+wsl -d UbuntuRA
+git config --global --add safe.directory /mnt/c/Users/<user>/Desktop/Workshop-26
+cd /mnt/c/Users/<user>/Desktop/Workshop-26/infra/ansible
 # Point d'entrée unique : prérequis -> déploiement -> vérifs de posture
-ansible-playbook site.yml                    # cœur + vérifications
-ansible-playbook site.yml -e with_ai=true    # + IA (pull des modèles Ollama)
-ansible-playbook site.yml -e configure_firewall=true  # + pare-feu hôte (démo)
+ansible-playbook -i inventory.ini site.yml                   # cœur + vérifications
+ansible-playbook -i inventory.ini site.yml -e with_ai=true   # + IA (modèles Ollama)
+ansible-playbook -i inventory.ini site.yml -e configure_firewall=true  # + pare-feu
 
 # Playbooks autonomes (hors chaîne nominale) :
-ansible-playbook preflight.yml   # prérequis seuls (docker, compose, sops, env)
-ansible-playbook deploy.yml      # déploiement seul
-ansible-playbook harden.yml      # vérifie durcissement + secrets + exposition
-ansible-playbook ops.yml -e action=status    # opérations (status/restart_api/backup_db)
+ansible-playbook -i inventory.ini preflight.yml   # prérequis seuls
+ansible-playbook -i inventory.ini deploy.yml      # déploiement seul
+ansible-playbook -i inventory.ini harden.yml      # vérifie durcissement + secrets + exposition
+ansible-playbook -i inventory.ini ops.yml -e action=status    # opérations (status/restart_api/backup_db)
 ```
 `site.yml` est le plan d'orchestration **Day-0/1** (déploiement/exploitation),
 **distinct** de la reprise autonome **Day-2** (moteur de remédiation). Ansible
