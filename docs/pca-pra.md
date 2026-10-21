@@ -34,8 +34,11 @@ et automatisée via Ansible (`infra/ansible/ops.yml`) :
 
 1. `ansible-playbook ops.yml -e action=status` — diagnostic.
 2. `ansible-playbook ops.yml -e action=restart_api` — relance ciblée.
-3. Restauration base : `ops.yml -e action=backup_db` (sauvegarde) puis `pg_restore`.
-4. Reconstruction complète : `ansible-playbook deploy.yml` (idempotent).
+3. Restauration base : `ansible-playbook backup.yml` (sauvegarde horodatée) puis
+   `ansible-playbook restore.yml -e confirm=yes` — **restauration vérifiée** par
+   transaction canari (échoue si `/api/ready` ne repasse pas à 200).
+4. Reconstruction complète : `ansible-playbook site.yml` (prérequis + déploiement
+   + vérifs de posture, idempotent).
 
 > ⚠️ Toute intervention corrective humaine **pendant la démonstration live**
 > entraîne ND (0/5) sur l'axe remédiation (sujet §8). Le PRA manuel est un plan
@@ -55,8 +58,9 @@ et automatisée via Ansible (`infra/ansible/ops.yml`) :
 
 - **État applicatif** : sans état dans les conteneurs métier (12-factor) →
   restauration = redéploiement. L'état vit dans PostgreSQL (volume persistant).
-- **Données** : sauvegarde logique `pg_dump` (démo). Industriel : PITR (WAL
-  archiving) + réplication streaming + bascule.
+- **Données** : sauvegarde logique `pg_dump` (`backup.yml`, horodatée + rétention)
+  et **restauration prouvée** (`restore.yml`, vérifiée par le canari). Industriel :
+  PITR (WAL archiving) + réplication streaming + bascule.
 - **Secrets** : régénérés/déchiffrés via SOPS/age au déploiement, jamais stockés
   en clair.
 - **Configuration** : tout est code (Compose + Ansible) → reconstruction

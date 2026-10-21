@@ -33,7 +33,8 @@ décision → remédiation → vérification**, sans intervention humaine.
 │   ml-detector (IsolationForest + corrélation SIEM)                     │      │
 │                 │ incident (jeton interne)                             │      │
 │   [control]     ▼                                                      │      │
-│          remediation-engine ──▶ Docker API (restart) · WAF (block) · canari   │
+│          remediation-engine (non-root) ─▶ docker-socket-proxy (filtré) ─▶ restart │
+│                             └─▶ WAF (block IP) · canari  — voir docs/durcissement.md │
 │                                                                              │
 │   [ai]    ollama + rag-assistant (LangChain) — assistant opérateur, read-only │
 └──────────────────────────────────────────────────────────────────────────────┘

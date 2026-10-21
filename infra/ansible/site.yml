@@ -1,0 +1,28 @@
+---
+# ============================================================================
+#  Point d'entrée UNIQUE d'orchestration (nœud de contrôle Ansible du PC Hôte).
+#  Enchaîne : prérequis -> déploiement -> vérification de posture de sécurité.
+#
+#  C'est le plan d'orchestration Day-0/Day-1 (déploiement & exploitation). Il est
+#  DISTINCT du plan Day-2 de reprise autonome, assuré par le moteur de
+#  remédiation (sujet §3.2/§3.4). Ansible n'est jamais dans la boucle de reprise
+#  live : il déploie, vérifie, sauvegarde ; l'automate répare.
+#
+#  Usage :
+#    ansible-playbook site.yml                       # cœur + vérifs
+#    ansible-playbook site.yml -e with_ai=true       # + assistant IA (Ollama)
+#    ansible-playbook site.yml -e configure_firewall=true   # + pare-feu hôte
+#
+#  Playbooks autonomes (hors chaîne nominale) :
+#    deploy.yml   déploiement seul            backup.yml   sauvegarde BDD
+#    harden.yml   vérifs de posture seules    restore.yml  restauration PRA (+canari)
+#    ops.yml      opérations (status/restart) preflight.yml prérequis seuls
+# ============================================================================
+- name: 1/3 — Prérequis du PC Hôte
+  ansible.builtin.import_playbook: preflight.yml
+
+- name: 2/3 — Déploiement reproductible
+  ansible.builtin.import_playbook: deploy.yml
+
+- name: 3/3 — Vérification de la posture de sécurité
+  ansible.builtin.import_playbook: harden.yml
