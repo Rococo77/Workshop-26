@@ -34,7 +34,14 @@ python attack/flood.py --target http://192.168.137.1:8080 --duration 40 --worker
 ```
 
 - Front + dashboard : http://127.0.0.1:8080
-- Grafana : http://127.0.0.1:3000
+- Grafana : http://127.0.0.1:3000/d/resilience-overview
+- Vault (local uniquement) : http://127.0.0.1:8201
+
+Scénario catastrophe (les 3 attaques en même temps, reprise suivie en direct) :
+`scripts/chaos.sh` — voir [runbook §6](docs/runbook.md).
+
+Base créée avant les migrations 03 à 06 : les rejouer à la main
+([runbook §4](docs/runbook.md#mise-à-niveau-dune-base-existante-migrations-03-à-06)).
 
 Assistant IA (optionnel) : `scripts/up-ai.sh` (Ollama sur GPU NVIDIA si disponible, sinon CPU).
 
@@ -88,7 +95,8 @@ attack/              scripts Red Team (flood, sqli, exfil)
 ml/                  entraînement & évaluation du modèle de détection
 docs/                architecture, EBIOS RM, PCA/PRA, NIS2/DORA, runbook
 tests/               tests (auth, pool biométrique, détection, garde-fous remédiation, parsing SIEM)
-scripts/             secrets (Vault : scripts/vault.sh), orchestration de démo, enrôlement facial opérateur
+scripts/             vault.sh (secrets), chaos.sh (scénario catastrophe), demo.sh,
+                     flash-esp.sh (flash ESP8266), enroll-face.sh, up-ai.sh
 docker-compose.yml   orchestration (réseaux segmentés)
 .github/workflows/   pipeline CI/CD (lint, tests, scan, E2E de résilience)
 Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
@@ -108,6 +116,9 @@ Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
 - [Architecture & chaîne de résilience](docs/architecture.md)
 - [Automatisation Ansible (déploiement, exploitation, PRA)](docs/ansible.md)
 - [Durcissement & moindre privilège des conteneurs](docs/durcissement.md)
+- [Gestion des secrets (HashiCorp Vault)](docs/vault.md)
+- [Pipeline CI/CD](docs/CICD.md)
+- [Schémas d'architecture (draw.io)](docs/diagrams/README.md)
 - [Runbook (déploiement, vérification, démo)](docs/runbook.md)
 - [Analyse de risques EBIOS RM](docs/ebios-rm.md)
 - [PCA / PRA](docs/pca-pra.md)

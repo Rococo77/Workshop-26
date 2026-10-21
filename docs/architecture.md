@@ -13,31 +13,24 @@ cinq domaines imposés autour d'une seule boucle : **attaque → détection →
 décision → remédiation → vérification**, sans intervention humaine.
 
 ```
-                         PC ATTAQUANT (réseau du groupe 192.168.137.0/24)
-                                   │  flood / sqli / exfil
-                                   ▼
-┌───────────────────────────── PC HÔTE (Docker) ──────────────────────────────┐
-│                                                                              │
-│   [edge]        ┌────────── WAF (ModSecurity + OWASP CRS) ──────────┐        │
-│   8080  ───────▶│  reverse proxy durci · rate limit · blocklist dyn.│        │
-│                 └───┬───────────────┬────────────────┬─────────────┘        │
-│   [app]             ▼               ▼                ▼                       │
-│              frontend React   payment-api (API)   auth (JWT)   supervision-bff │
-│                                     │   │                              │      │
-│   [data]                            ▼   ▼                              │      │
-│                                 PostgreSQL (interne, non exposé)       │      │
-│                                                                        │      │
-│   [obs]   Prometheus ── Loki ── Promtail ── Grafana  ◀── métriques/logs│      │
-│                 │                                                      │      │
-│                 ▼ (features)                                           │      │
-│   ml-detector (IsolationForest + corrélation SIEM)                     │      │
-│                 │ incident (jeton interne)                             │      │
-│   [control]     ▼                                                      │      │
-│          remediation-engine (non-root) ─▶ docker-socket-proxy (filtré) ─▶ restart │
-│                             └─▶ WAF (block IP) · canari  — voir docs/durcissement.md │
-│                                                                              │
-│   [ai]    ollama + rag-assistant (LangChain) — assistant opérateur, read-only │
-└──────────────────────────────────────────────────────────────────────────────┘
+        PC ATTAQUANT                    point d'accès RESILIENCE-G1 (192.168.137.0/24)
+   flood / sqli / exfil ──┐                    ESP8266 (LED) ──WebSocket──┐
+                          ▼                                               ▼
+┌───────────────────────────── PC HÔTE (Docker) ─────────────────────────────────┐
+│ [edge]   WAF ModSecurity + OWASP CRS · rate limit · blocklist   :8080 (EDGE_BIND)│
+│            │ /             │ /api, /api/ws        │ /auth        │ /supervision  │
+│ [app]    frontend      payment-api ──────────── auth (JWT)    supervision-bff    │
+│                          │      │                   │                │          │
+│ [biometric]              │   face-api (DeepFace)    │                │          │
+│ [data]                   └──── PostgreSQL ──────────┘                │          │
+│                                                                      │          │
+│ [obs]    waf-metrics · Prometheus · Promtail · Loki · Grafana :3000 ◀┘          │
+│                 │ features + journaux                                           │
+│ [control]  ml-detector ──incident──▶ remediation-engine ──▶ docker-socket-proxy │
+│                                        │  block IP (WAF) · restart · canari      │
+│ [secrets]  Vault 127.0.0.1:8201 ──(rendu du .env au déploiement)                │
+│ [app]      ollama + rag-assistant (profil ai, lecture seule) 127.0.0.1:8200     │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 2. Les cinq domaines et leur interconnexion
@@ -188,8 +181,11 @@ Points clés de conception :
 
 ## 6. Sécurité et durcissement
 
-- **Segmentation réseau** : `edge` (WAF) / `app` / `data` (interne) / `obs` /
-  `control` (remédiation isolée). La base n'est accessible que depuis `app`.
+- **Segmentation réseau** (7 réseaux) : `edge` (WAF, seul publié) / `app`
+  (interne) / `data` (interne, PostgreSQL) / `biometric` (interne, `face-api`
+  joignable par `payment-api` seul) / `obs` / `control` (interne, remédiation
+  et proxy Docker) / `secrets` (Vault seul). La base n'est accessible que
+  depuis `payment-api` et `auth`. Matrice complète : [schéma Réseaux](diagrams/README.md).
 - **WAF** : ModSecurity + OWASP CRS (blocage réel), rate limiting par IP,
   en-têtes de durcissement, blocklist dynamique pilotée par la remédiation.
 - **Moindre privilège de l'automate** : le moteur de remédiation a besoin du
@@ -217,3 +213,7 @@ Points clés de conception :
   dernière utilisation et job planifié supprimant le pool d'empreintes
   2 ans après la dernière connexion/confirmation (politique annoncée à
   l'utilisateur dès l'inscription, voir §3.1).
+
+## 8. Schémas (draw.io)
+
+Liste et liens : [docs/diagrams/README.md](diagrams/README.md).
