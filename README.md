@@ -57,12 +57,13 @@ Assistant IA (optionnel) : `scripts/up-ai.sh` (Ollama sur GPU NVIDIA si disponib
 Attaque (PC Attaquant) ─▶ WAF ─▶ API/Auth ─▶ PostgreSQL
                            │         │
               logs/métriques ▼         ▼ métriques
-              Prometheus / Loki ─▶ ml-detector (IsolationForest + SIEM)
-                                         │ incident
+              Prometheus / Loki ─▶ ml-detector (IsolationForest + SIEM + comptes leurres)
+                                         │ incident / clôture
                                          ▼
                            remediation-engine ─▶ block IP / restart / CANARI
-                                         │
-                                 dashboard React (reprise prouvée)
+                                         │        mode dégradé (virements en file)
+                                         ▼
+                 dashboard React (reprise prouvée, rapport d'incident DORA)
 ```
 
 | Domaine | Composants |
@@ -91,10 +92,11 @@ temps réel (WebSocket) le résultat de chaque vérification faciale — voir
 services/            microservices (API, auth, front, détection, remédiation, BFF, RAG, face-api)
 infra/               WAF, observabilité (Prometheus/Grafana/Loki/Promtail), Ansible
 firmware/            démo bonus : indicateur LED ESP8266 (PlatformIO), hors périmètre noté
-attack/              scripts Red Team (flood, sqli, exfil)
+attack/              scripts Red Team (flood, sqli, exfil, leak_replay)
 ml/                  entraînement & évaluation du modèle de détection
 docs/                architecture, EBIOS RM, PCA/PRA, NIS2/DORA, runbook
-tests/               tests (auth, pool biométrique, détection, garde-fous remédiation, parsing SIEM)
+tests/               tests (auth, pool biométrique, détection, garde-fous remédiation, parsing SIEM,
+                     comptes leurres, mode dégradé, rapport d'incident)
 scripts/             vault.sh (secrets), chaos.sh (scénario catastrophe), demo.sh,
                      flash-esp.sh (flash ESP8266), enroll-face.sh, up-ai.sh
 docker-compose.yml   orchestration (réseaux segmentés)
@@ -106,7 +108,12 @@ Makefile             raccourcis d'exploitation (optionnels, WSL/Linux/macOS)
 
 - **Détection ML primaire** (pas de règles en dur) avec explicabilité.
 - **Reprise prouvée, pas supposée** : validée par une transaction canari réelle.
-- **Disponibilité ≠ compromission** : playbooks distincts (DoS vs injection).
+- **Disponibilité ≠ compromission** : playbooks distincts (DoS vs injection ou
+  fuite de données détectée par comptes leurres).
+- **Aucun paiement accepté perdu** : pendant la remédiation d'un DoS, les
+  virements validés attendent en file puis sont réglés à la clôture.
+- **Rapport sans humain** : chaque incident produit un rapport au format d'une
+  notification initiale DORA ; l'assistant RAG peut en rédiger le résumé direction.
 - **Moindre privilège** : automate isolé (`control`), allowlists, pas d'UI admin
   exposée ; assistant IA en lecture seule, sans privilège.
 - **Aucun secret en clair** : HashiCorp Vault (source de vérité), `.env` rendu au déploiement et ignoré par git.

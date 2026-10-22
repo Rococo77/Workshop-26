@@ -134,6 +134,8 @@ for f in 03_face_verification 04_auth_self_service 05_biometric_pool 06_canary_a
   docker exec -i ra-postgres psql -U payuser -d paymentdb < services/payment-api/db/init/$f.sql
 done
 ```
+Équivalent Ansible : `ansible-playbook infra/ansible/ops.yml -e action=migrate`.
+
 | Script | Apport |
 |---|---|
 | `03_face_verification.sql` | virements `pending` + journal de vérification faciale |

@@ -40,7 +40,9 @@ et le cœur de la valeur est le job **E2E** qui rejoue la chaîne de cyber-rési
  ┌─────────────────────────────────────────────┐  étape 7 : E2E RÉEL
  │ e2e : attaque → détection → remédiation →    │  scripts/ci-e2e.sh
  │       transaction canari (échoue si pas de   │  (fait tourner tout le stack)
- │       reprise autonome)                      │
+ │       reprise autonome) ; virement en file   │
+ │       puis réglé ; compte leurre détecté ;   │
+ │       rapports d'incident générés            │
  └────┬────────────────────────────────────────┘
       ▼
  ┌──────────────┐  étape 8 : gate humain (environment production-approval)
@@ -111,8 +113,10 @@ pytest --cov
 # Front
 cd services/frontend && npm ci && npm run lint && npm run build
 
-# Chaîne de résilience de bout en bout (nécessite Docker)
-scripts/ci-e2e.sh
+# Chaîne de résilience de bout en bout (nécessite Docker). Le script crée
+# puis SUPPRIME l'utilisateur de test (défaut : alice) : en local, choisir
+# un nom libre pour ne pas effacer un compte existant.
+E2E_USER=e2e_test scripts/ci-e2e.sh
 
 # Scan Trivy local
 trivy fs --severity HIGH,CRITICAL .

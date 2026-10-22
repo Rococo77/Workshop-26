@@ -25,6 +25,7 @@ CATEGORY = {
     "injection_attempt": "intégrité / confidentialité (tentative)",
     "honeytoken_triggered": "confidentialité (compromission)",
 }
+COMPROMISE = ("injection_attempt", "honeytoken_triggered")
 TODO = "à compléter par le responsable de la notification"
 
 
@@ -78,6 +79,12 @@ def to_markdown(r: dict) -> str:
         "contained": "menace confinée, reprise non prouvée",
         "failed": "reprise non prouvée : procédure manuelle du PRA",
     }.get(r["outcome"], r["outcome"])
+    if r["type"] in COMPROMISE and r["outcome"] != "failed":
+        # Le service n'est pas tombé : pas de « reprise », la menace reste à traiter.
+        duration = "sans objet (service resté disponible)"
+        outcome = (
+            "source confinée, intégrité du service vérifiée par canari, compromission à traiter"
+        )
     lines = [
         f"# Notification initiale d'incident TIC : {r['id']}",
         "",
