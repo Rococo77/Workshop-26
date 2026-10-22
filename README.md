@@ -74,13 +74,18 @@ Attaque (PC Attaquant) ─▶ WAF ─▶ API/Auth ─▶ PostgreSQL
 | Cybersécurité | WAF ModSecurity + OWASP CRS, SIEM (Loki), secrets HashiCorp Vault |
 | Gouvernance | EBIOS RM, PCA/PRA, NIS2/DORA (`docs/`) |
 
-### Authentification : auto-inscription et connexion à deux facteurs
+### Authentification : auto-inscription et connexion en 3 étapes ordonnées
 
 Aucun compte client n'est pré-créé. Chaque client s'inscrit lui-même
 (identifiant, mot de passe, consentement RGPD, **pool de 5 photos** du
-visage : droite, haut, bas, gauche, face) puis se connecte ensuite avec son
-mot de passe **et** son visage (une seule photo, comparée au pool). Détails
-et schémas : [docs/architecture.md §3.1](docs/architecture.md).
+visage : droite, haut, bas, gauche, face) puis se connecte ensuite en 3
+étapes strictement ordonnées (§10.1) : **identifiant** seul, puis **visage**
+(une photo, comparée au pool), puis **mot de passe** — jamais l'inverse.
+Chaque étape n'émet qu'un jeton intermédiaire à usage unique, consommé par
+la seule étape suivante (`POST /auth/login/identify` → `/face` → `/password`,
+tous portés par `payment-api`). Operator/admin (supervision) gardent un
+login mot de passe seul, sans visage. Détails et schémas :
+[docs/architecture.md §3.1](docs/architecture.md).
 
 Démo bonus (hors périmètre noté) : un indicateur **LED ESP8266** affiche en
 temps réel (WebSocket) le résultat de chaque vérification faciale — voir

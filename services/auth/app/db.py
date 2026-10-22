@@ -36,20 +36,6 @@ def fetch_user(username: str) -> dict | None:
     return row
 
 
-def has_face_enrollment(username: str) -> bool:
-    """La table `face_enrollment` appartient fonctionnellement à
-    payment-api, mais vit dans la même base : lecture directe plutôt qu'un
-    appel réseau vers un service qui n'a, lui, pas accès au réseau
-    `biometric` (voir docker-compose.yml)."""
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM face_enrollment e "
-            "JOIN app_user u ON u.id = e.user_id WHERE u.username = %s) AS enrolled",
-            (username,),
-        ).fetchone()
-    return bool(row["enrolled"])
-
-
 def is_honeytoken(username: str) -> bool:
     """Compte leurre (table `honeytoken`, migration 07) : personne ne s'en sert.
     Base non migrée : aucun leurre, la connexion ne doit pas tomber pour autant."""

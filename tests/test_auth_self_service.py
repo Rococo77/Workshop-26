@@ -22,6 +22,9 @@ db = load_service_module("payment_api", "services/payment-api", "db")
 accounts = load_service_module("payment_api", "services/payment-api", "accounts")
 biometrics = load_service_module("payment_api", "services/payment-api", "biometrics")
 auth = load_service_module("payment_api", "services/payment-api", "auth")
+# Chargé en dernier : `main` importe les modules ci-dessus (déjà en cache,
+# réutilisés tels quels par l'import relatif) et déclare les routes admin.
+main = load_service_module("payment_api", "services/payment-api", "main")
 
 
 # ------------------------------------------------------------ accounts.py
@@ -104,6 +107,72 @@ def test_pending_face_token_is_accepted_by_current_pending_face():
     assert principal.username == "jordan"
 
 
+# ---------------------------------- parcours client (§10.1) : jeton étape 3
+def test_pending_password_token_is_rejected_by_current_principal():
+    """Même garde-fou que face_pending : aucune route métier normale."""
+    token = _raw_token(typ="password_pending")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_principal(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_normal_token_is_rejected_by_current_pending_password():
+    token = auth.create_access_token(subject="jordan", role="customer")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_pending_password(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_pending_face_token_is_rejected_by_current_pending_password():
+    """Un jeton d'étape 1 ne doit pas ouvrir l'étape 3 : les 3 étapes sont
+    strictement ordonnées (identifiant -> visage -> mot de passe)."""
+    token = _raw_token(typ="face_pending")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_pending_password(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_pending_password_token_is_rejected_by_current_pending_face():
+    """Symétrique : un jeton d'étape 3 ne doit pas rouvrir l'étape 2."""
+    token = _raw_token(typ="password_pending")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_pending_face(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_pending_password_token_is_accepted_by_current_pending_password():
+    token = _raw_token(typ="password_pending")
+    principal = auth.current_pending_password(_creds(token))
+    assert principal.username == "jordan"
+
+
+def test_create_pending_face_token_has_face_pending_typ():
+    token = auth.create_pending_face_token(subject="jordan", role="customer")
+    principal = auth.current_pending_face(_creds(token))
+    assert principal.username == "jordan"
+
+
+def test_create_pending_password_token_has_password_pending_typ():
+    token = auth.create_pending_password_token(subject="jordan", role="customer")
+    principal = auth.current_pending_password(_creds(token))
+    assert principal.username == "jordan"
+
+
+# ------------------------------------------- back-office (§10.1, rôle admin)
+def test_current_admin_accepts_admin_role():
+    token = auth.create_access_token(subject="root", role="admin")
+    principal = auth.current_admin(auth.current_principal(_creds(token)))
+    assert principal.username == "root"
+
+
+@pytest.mark.parametrize("role", ["customer", "operator"])
+def test_current_admin_rejects_non_admin_roles(role):
+    token = auth.create_access_token(subject="u", role=role)
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_admin(auth.current_principal(_creds(token)))
+    assert exc.value.status_code == 403
+
+
 # --------------------------------------------- biometrics.py (purpose filter)
 class _FakeConn:
     """Capture la requête exécutée sans toucher une vraie base."""
@@ -121,6 +190,23 @@ class _FakeConn:
         return self._row
 
 
+def test_verify_login_password_queries_by_username_and_candidate_password(monkeypatch):
+    """Étape 3 (§10.1) : la comparaison est faite par pgcrypto (`crypt(...)`
+    dans le SQL), jamais en comparant un hash en clair côté Python."""
+    fake = _FakeConn({"ok": True, "locked": False})
+
+    @contextlib.contextmanager
+    def fake_get_conn():
+        yield fake
+
+    monkeypatch.setattr(db, "get_conn", fake_get_conn)
+
+    row = db.verify_login_password("jordan", "s3cret!!!!")
+    assert row == {"ok": True, "locked": False}
+    assert fake.params == ("s3cret!!!!", "jordan")
+    assert "crypt(" in fake.sql
+
+
 def test_recent_failures_filters_by_purpose(monkeypatch):
     fake = _FakeConn({"n": 3})
 
@@ -135,6 +221,33 @@ def test_recent_failures_filters_by_purpose(monkeypatch):
 
     biometrics.recent_failures("jordan", 15)  # défaut inchangé : 'confirm'
     assert fake.params == ("jordan", "confirm", 15)
+
+
+def test_recent_failures_counts_password_mismatch_alongside_face_failures(monkeypatch):
+    """§10.1 : 2 tentatives AU TOTAL pour le login (visage + mot de passe
+    confondus) -> un échec de mot de passe doit compter dans le même
+    compteur qu'un visage non reconnu, pas dans un compteur à part."""
+    fake = _FakeConn({"n": 0})
+
+    @contextlib.contextmanager
+    def fake_get_conn():
+        yield fake
+
+    monkeypatch.setattr(biometrics.db, "get_conn", fake_get_conn)
+
+    biometrics.recent_failures("jordan", 5, purpose="login")
+    assert "'password_mismatch'" in fake.sql
+    assert "'mismatch'" in fake.sql
+    assert "'spoof'" in fake.sql
+
+
+def test_login_lockout_defaults_match_10_1():
+    """§10.1 : 2 tentatives au total puis 5 min de blocage (login) — distinct
+    du verrou de confirmation de virement (5 échecs / 15 min, inchangé)."""
+    assert config.settings.login_lockout_failures == 2
+    assert config.settings.login_lockout_minutes == 5
+    assert config.settings.face_lockout_failures == 5
+    assert config.settings.face_lockout_minutes == 15
 
 
 # ------------------------------------------- biometrics.py (pool multi-poses)
@@ -205,3 +318,102 @@ def test_get_enrollment_returns_none_when_no_pose_is_enrolled(monkeypatch):
     fake = _FakeMultiConn(fetchall_result=[])
     _patch_get_conn(monkeypatch, fake)
     assert biometrics.get_enrollment("ghost") is None
+
+
+# ---------------------------- back-office : reset visage (biometrics.py/db.py)
+class _FakeDeleteConn:
+    """Comme `_FakeConn`, mais expose `rowcount` (résultat d'un DELETE)."""
+
+    def __init__(self, rowcount):
+        self.rowcount = rowcount
+        self.sql = None
+        self.params = None
+
+    def execute(self, sql, params):
+        self.sql, self.params = sql, params
+        return self
+
+
+def test_delete_enrollment_reports_whether_anything_was_removed(monkeypatch):
+    fake = _FakeDeleteConn(rowcount=5)  # 5 poses supprimées
+    _patch_get_conn(monkeypatch, fake)
+    assert biometrics.delete_enrollment("jordan") is True
+    assert fake.params == ("jordan",)
+
+    fake_nothing = _FakeDeleteConn(rowcount=0)  # rien à supprimer (déjà vide)
+    _patch_get_conn(monkeypatch, fake_nothing)
+    assert biometrics.delete_enrollment("ghost") is False
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"locked": False, "enrolled": False}, True),  # client existant, visage réinitialisé
+        ({"locked": False, "enrolled": True}, False),  # visage déjà enrôlé : login normal
+        ({"locked": True, "enrolled": False}, False),  # verrouillé : pas de bascule ré-enrôlement
+        (None, False),  # identifiant inexistant ou pas un client
+    ],
+)
+def test_customer_needs_reenrollment(monkeypatch, row, expected):
+    fake = _FakeConn(row)
+
+    @contextlib.contextmanager
+    def fake_get_conn():
+        yield fake
+
+    monkeypatch.setattr(db, "get_conn", fake_get_conn)
+    assert db.customer_needs_reenrollment("jordan") is expected
+
+
+# -------------------------- back-office : verrouillage et rôle (db.py, main.py)
+def test_set_account_locked_reports_whether_the_user_exists(monkeypatch):
+    fake = _FakeDeleteConn(rowcount=1)
+    _patch_get_conn(monkeypatch, fake)
+    assert db.set_account_locked("jordan", True) is True
+    assert fake.params == (True, "jordan")
+
+    fake_missing = _FakeDeleteConn(rowcount=0)
+    _patch_get_conn(monkeypatch, fake_missing)
+    assert db.set_account_locked("ghost", True) is False
+
+
+def test_set_account_role_reports_whether_the_user_exists(monkeypatch):
+    fake = _FakeDeleteConn(rowcount=1)
+    _patch_get_conn(monkeypatch, fake)
+    assert db.set_account_role("jordan", "operator") is True
+    assert fake.params == ("operator", "jordan")
+
+    fake_missing = _FakeDeleteConn(rowcount=0)
+    _patch_get_conn(monkeypatch, fake_missing)
+    assert db.set_account_role("ghost", "operator") is False
+
+
+def test_admin_cannot_modify_their_own_account():
+    """Garde-fou de `admin_update_user` : un admin ne peut pas se verrouiller
+    ni changer son propre rôle par erreur (pas de rattrapage possible sans
+    accès direct à la base)."""
+    admin = auth.Principal(username="root", role="admin")
+
+    with pytest.raises(fastapi.HTTPException) as exc:
+        main.admin_update_user("root", main.UserPatch(locked=True), admin)
+    assert exc.value.status_code == 409
+
+    with pytest.raises(fastapi.HTTPException) as exc:
+        main.admin_update_user("root", main.UserPatch(role="operator"), admin)
+    assert exc.value.status_code == 409
+
+
+def test_admin_update_user_rejects_invalid_role():
+    admin = auth.Principal(username="root", role="admin")
+
+    with pytest.raises(fastapi.HTTPException) as exc:
+        main.admin_update_user("someone", main.UserPatch(role="superuser"), admin)
+    assert exc.value.status_code == 422
+
+
+def test_admin_update_user_rejects_empty_patch():
+    admin = auth.Principal(username="root", role="admin")
+
+    with pytest.raises(fastapi.HTTPException) as exc:
+        main.admin_update_user("someone", main.UserPatch(), admin)
+    assert exc.value.status_code == 422

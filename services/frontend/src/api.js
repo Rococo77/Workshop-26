@@ -21,6 +21,7 @@ const DETAILS = {
   "transaction face_mismatch": "Ce virement a été refusé après plusieurs échecs de reconnaissance.",
   "transaction settled": "Ce virement a déjà été validé.",
   "face verification not configured": "La validation par visage n'est pas configurée pour ce compte. Contactez le support.",
+  "account locked": "Compte verrouillé. Contactez le support.",
 };
 
 // Validation faciale : l'API renvoie `detail: { code, attempts_left? }`.
@@ -36,6 +37,10 @@ const FACE_CODES = {
   image_too_large: "Image trop lourde. Reprenez la photo.",
   face_locked: "Trop d'échecs de reconnaissance. Réessayez dans 15 minutes.",
   face_unavailable: "La reconnaissance faciale est momentanément indisponible. Réessayez.",
+  // Connexion client (POST /api/auth/login/face|password) : 2 tentatives au
+  // total pour tout le parcours (visage + mot de passe confondus), §10.1.
+  login_locked: "Trop de tentatives de connexion. Réessayez dans 5 minutes.",
+  invalid_credentials: "Mot de passe incorrect.",
   // Auto-inscription (POST /api/auth/register).
   username_taken: "Cet identifiant est déjà utilisé.",
   invalid_username: "Identifiant invalide (3 à 32 caractères : lettres, chiffres, points, underscore).",
@@ -85,8 +90,9 @@ async function request(path, { token, method = "GET", body } = {}) {
   return data;
 }
 
-// Mot de passe seul : pour un client, renvoie { status: "face_required",
-// pending_token, role } (pas un token d'accès) -> voir loginFace().
+// Réservé à l'espace opérateur/admin (Supervision.jsx) : mot de passe seul,
+// aucun second facteur. Le parcours client passe par identify()/loginFace()/
+// loginPassword() ci-dessous (§10.1 : identifiant -> visage -> mot de passe).
 export function login(username, password) {
   return request("/auth/login", { method: "POST", body: { username, password } }).catch((e) => {
     if (e.status === 401) throw new ApiError("Identifiant ou mot de passe incorrect.", 401);
@@ -94,9 +100,23 @@ export function login(username, password) {
   });
 }
 
-// Second facteur : visage, avec le `pending_token` renvoyé par login().
+// Étape 1 du parcours client : identifiant seul -> { status: "face_required",
+// pending_token } (jamais un échec, même si l'identifiant n'existe pas).
+export const identify = (username) =>
+  request("/api/auth/login/identify", { method: "POST", body: { username } });
+
+// Étape 2 : visage, avec le `pending_token` renvoyé par identify(). Sur
+// reconnaissance -> { status: "password_required", pending_token } (nouveau
+// jeton), pas encore un accès : le mot de passe reste à vérifier.
 export const loginFace = (pendingToken, image) =>
   request("/api/auth/login/face", { token: pendingToken, method: "POST", body: { image } });
+
+// Étape 3, finale : mot de passe, avec le `pending_token` renvoyé par
+// loginFace(). Renvoie l'access_token complet. Erreurs structurées
+// (`invalid_credentials`, `login_locked`, cf. FACE_CODES) : pas de .catch
+// ad-hoc ici, sinon `err.code`/`attemptsLeft` seraient perdus.
+export const loginPassword = (pendingToken, password) =>
+  request("/api/auth/login/password", { token: pendingToken, method: "POST", body: { password } });
 
 // Auto-inscription : identifiant + mot de passe + pool de 5 photos (une par
 // pose : right/up/down/left/face) + consentement, en un seul appel.
@@ -130,6 +150,19 @@ export const getStatus = () => request("/supervision/status");
 
 // Réservé aux rôles operator et admin (vue détaillée de la supervision).
 export const getOverview = (token) => request("/supervision/overview", { token });
+
+// Back-office (rôle admin uniquement, §10.1) : comptes (tous rôles),
+// verrouillage/rôle, réinitialisation du visage. Porté par payment-api
+// (accès direct à la base des comptes/visages), pas par le BFF de
+// supervision qui reste lecture seule.
+export const listUsers = (token) => request("/api/admin/users", { token });
+
+// `patch` : { locked?: bool, role?: "customer"|"operator"|"admin" }.
+export const updateUser = (token, username, patch) =>
+  request(`/api/admin/users/${encodeURIComponent(username)}`, { token, method: "PATCH", body: patch });
+
+export const resetCustomerFace = (token, username) =>
+  request(`/api/admin/users/${encodeURIComponent(username)}/face`, { token, method: "DELETE" });
 
 // Rapport d'incident (notification initiale DORA) généré par le moteur.
 export const getReport = (token, id) => request(`/supervision/reports/${id}`, { token });

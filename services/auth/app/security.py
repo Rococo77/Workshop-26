@@ -34,20 +34,3 @@ def create_access_token(*, subject: str, role: str) -> str:
         "iss": "resilience-alpha-auth",
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
-
-
-def create_pending_face_token(*, subject: str, role: str) -> str:
-    """Jeton intermédiaire émis après vérification du mot de passe d'un
-    client : ne donne accès à AUCUNE route métier (claim `typ`), seulement
-    au second facteur POST /auth/login/face (payment-api). Durée de vie
-    courte pour limiter la fenêtre de rejeu."""
-    now = datetime.now(UTC)
-    payload = {
-        "sub": subject,
-        "role": role,
-        "typ": "face_pending",
-        "iat": now,
-        "exp": now + timedelta(seconds=settings.face_pending_expire_seconds),
-        "iss": "resilience-alpha-auth",
-    }
-    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)

@@ -17,9 +17,6 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 30
-    # Jeton intermédiaire (mot de passe validé, visage pas encore vérifié),
-    # consommé par payment-api : POST /auth/login/face. Durée courte.
-    face_pending_expire_seconds: int = 120
 
     @property
     def dsn(self) -> str:
