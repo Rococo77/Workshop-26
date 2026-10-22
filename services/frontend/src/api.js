@@ -150,3 +150,16 @@ export const getStatus = () => request("/supervision/status");
 
 // Réservé aux rôles operator et admin (vue détaillée de la supervision).
 export const getOverview = (token) => request("/supervision/overview", { token });
+
+// Back-office (rôle admin uniquement, §10.1) : comptes (tous rôles),
+// verrouillage/rôle, réinitialisation du visage. Porté par payment-api
+// (accès direct à la base des comptes/visages), pas par le BFF de
+// supervision qui reste lecture seule.
+export const listUsers = (token) => request("/api/admin/users", { token });
+
+// `patch` : { locked?: bool, role?: "customer"|"operator"|"admin" }.
+export const updateUser = (token, username, patch) =>
+  request(`/api/admin/users/${encodeURIComponent(username)}`, { token, method: "PATCH", body: patch });
+
+export const resetCustomerFace = (token, username) =>
+  request(`/api/admin/users/${encodeURIComponent(username)}/face`, { token, method: "DELETE" });

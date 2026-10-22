@@ -60,6 +60,14 @@ def current_customer(principal: Principal = Depends(current_principal)) -> Princ
     return principal
 
 
+def current_admin(principal: Principal = Depends(current_principal)) -> Principal:
+    """Back-office (§10.1) : administration des visages, réservée au rôle
+    admin (operator garde la supervision lecture seule, pas d'action ici)."""
+    if principal.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin role required")
+    return principal
+
+
 def current_pending_face(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> Principal:

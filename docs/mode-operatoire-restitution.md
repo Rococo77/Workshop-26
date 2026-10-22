@@ -124,20 +124,75 @@ conforme produirait un flux qui *a l'air* correct sans l'être.
         2/5 vs 5/15 figées en dur). Suite complète : **62 passed, 4 skipped** (skips sans
         rapport). Images `payment-api`/`frontend` reconstruites et redéployées.
 
-### 1.4 — Écran back-office : administration reconnaissance faciale + habilitations
+### 1.4 — Écran back-office : administration reconnaissance faciale + habilitations ✅ FAIT (périmètre réduit)
 
-- **Écart actuel** : aucun composant trouvé (`grep -ri admin services/frontend/src` ne remonte
-  que `api.js`, `App.jsx`, `Supervision.jsx` — tous liés à la supervision incident, pas à
-  l'administration des utilisateurs/visages). Les rôles `operator`/`admin` n'ont qu'une vue
+- **Écart initial** : aucun composant trouvé. Les rôles `operator`/`admin` n'avaient qu'une vue
   supervision.
-- **Actions** (le plus gros morceau — à chiffrer en premier pour la suite du planning) :
-  - [ ] Définir le périmètre minimal exigé par le sujet : lister/désenrôler un visage,
-        activer/désactiver un compte, changer une habilitation (rôle) ? (à confirmer via §10.1).
-  - [ ] Ajouter les routes API nécessaires côté `payment-api` ou `face-api` (lister les visages
-        enrôlés, révoquer, changer un rôle) — probablement déjà protégées par JWT role=admin.
-  - [ ] Ajouter un écran React (nouvelle route, garde par rôle `admin`/`operator`) dans
-        `services/frontend/src`, réutilisant les patterns existants de `Supervision.jsx`.
-  - [ ] Écrire au moins un test E2E qui couvre ce nouvel écran.
+- **Périmètre retenu** (précisé par toi, plus étroit que les 3 options envisagées initialement) :
+  - [x] Lister les comptes clients avec l'état de leur visage enrôlé. « Connectés » lu comme
+        « comptes clients enregistrés », pas des sessions actives en temps réel — les JWT sont
+        sans état ici, il n'existe aucun suivi de session à interroger. À dire si ce n'est pas
+        ce qui était voulu.
+  - [x] Réinitialiser (supprimer) le visage enrôlé d'un client.
+  - [x] Conséquence au login : si le visage a été réinitialisé, l'étape `identify` saute
+        directement au mot de passe avec le message demandé, puis le ré-enrôlement (5 photos)
+        est imposé avant tout accès bancaire.
+  - [x] **Ajouté ensuite** (demande de suivi) : activer/désactiver un compte (tous rôles) et
+        changer un rôle (customer/operator/admin) — `PATCH /admin/users/{username}`, body
+        `{locked?, role?}`. Garde-fou : un admin ne peut pas s'auto-modifier (verrou ou rôle),
+        pour éviter de se verrouiller hors du seul compte admin par erreur. Pas de protection
+        équivalente sur le « dernier admin » (si plusieurs admins, rien n'empêche de tous se
+        rétrograder mutuellement) — limite connue, pas traitée.
+  - **Séparation des rôles** : vérifiée côté API à chaque requête (`current_admin`,
+    `current_customer`, `current_principal` relisent le claim `role` du JWT), pas dans le front
+    — celui-ci n'utilise le rôle que pour masquer/afficher des écrans, sans valeur de sécurité.
+- **Bug trouvé et corrigé en testant en direct (pas lié à 1.3/au changement de rôle en soi)** :
+  le WAF (OWASP CRS, règle 911100) n'autorise par défaut que `GET/HEAD/POST/OPTIONS` — **toutes**
+  les routes back-office utilisant `DELETE` ou `PATCH` étaient bloquées en 403 *avant* d'atteindre
+  payment-api, y compris le reset de visage déjà livré plus tôt (jamais testé via le WAF jusqu'ici,
+  seulement vérifié en unitaire). Corrigé par une exclusion CRS dédiée (voir Actions).
+- **Actions** :
+  - [x] `infra/waf/modsecurity-exclusions.conf` (nouveau) + `infra/waf/Dockerfile` : exclusion
+        CRS officielle (`REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf`) autorisant `PATCH`/`DELETE`
+        en plus des méthodes par défaut. Sans ça, `DELETE /api/admin/users/{username}/face`
+        (livré avec la première partie du back-office) ne fonctionnait pas non plus via le WAF.
+  - [x] `services/payment-api/app/auth.py` : nouveau garde `current_admin` (rôle admin
+        uniquement — `operator` garde la supervision lecture seule, pas d'action ici).
+  - [x] `services/payment-api/app/db.py` : `list_users()` (tous rôles, remplace
+        `list_customers()`), `customer_needs_reenrollment()` (lu par `login_identify`),
+        `set_account_locked()`, `set_account_role()`.
+  - [x] `services/payment-api/app/biometrics.py` : `delete_enrollment()`.
+  - [x] Routes (`services/payment-api/app/main.py`), toutes réservées au rôle admin :
+        `GET /admin/users`, `PATCH /admin/users/{username}` (`{locked?, role?}`, rejette un
+        rôle invalide en 422 et l'auto-modification en 409), `DELETE /admin/users/{username}/face`.
+  - [x] `login_identify` : si le client existe, n'est pas verrouillé et n'a plus de visage
+        enrôlé → jeton `password_pending` direct (saute le visage), statut
+        `password_required_reenroll`. **Compromis assumé** : ça révèle qu'un compte existe et
+        a besoin d'un ré-enrôlement (petite régression par rapport à l'absence d'oracle voulue
+        en 1.1) — en pratique, un compte client n'arrive dans cet état que suite à une action
+        admin explicite (pas via l'inscription normale, qui enrôle toujours le visage d'un
+        coup), donc la fenêtre d'exposition reste étroite.
+  - [x] Frontend : écran `/supervision` étend la session stockée pour inclure le rôle **et
+        l'identifiant** (pas seulement le jeton) ; `AdminPanel` (visible seulement si
+        `role==="admin"`) affiche désormais aussi une colonne rôle (`<select>`, désactivé sur
+        soi-même) et un bouton verrouiller/déverrouiller, en plus du reset de visage. Écran de
+        connexion client (`App.jsx`) : message demandé affiché sur l'étape mot de passe quand
+        elle est atteinte directement depuis l'identifiant (`step.reenroll`). Le parcours de
+        ré-enrôlement après connexion (5 photos) **existait déjà** (`FaceEnrollment.jsx`,
+        déclenché par `GET /api/face/enrollment` dans `Banking`) — rien à ajouter là.
+  - [x] Tests : 13 ajoutés au total (garde `current_admin`, `customer_needs_reenrollment`,
+        `delete_enrollment`, `set_account_locked`, `set_account_role`, garde-fou
+        anti-auto-modification, rejet de rôle invalide). Suite complète : **75 passed, 4 skipped**.
+  - [x] Vérifié en direct via le WAF (après correction de l'exclusion CRS ci-dessus) :
+        `/api/admin/users` sans jeton → 401 ; auto-modification → 409 ; rôle invalide → 422 ;
+        verrouillage/déverrouillage et changement de rôle sur le compte `operator` de seed →
+        200, remis dans son état d'origine après coup ; reset de visage sur un identifiant
+        inexistant → 200 `reset:false` ; `identify` sur un client déjà enrôlé (`caro`) renvoie
+        bien le statut normal (pas de faux positif de ré-enrôlement).
+  - [ ] **Pas vérifié en direct** : le cycle complet reset → identify → mot de passe →
+        ré-enrôlement avec un vrai compte (je n'ai pas voulu toucher aux données d'un compte de
+        démo existant sans te le demander) — seulement couvert par les tests unitaires. À faire
+        pendant la recette (Phase 2) avec un compte jetable.
 
 ### 1.5 — LED ESP8266 en 5 états
 
@@ -270,6 +325,10 @@ conforme produirait un flux qui *a l'air* correct sans l'être.
   enrôlé réel) — à couvrir dans la recette hotspot (Phase 2), pas avant.
 - Le point 1.4 (écran back-office) n'a pas de brique existante à adapter — c'est le plus gros
   effort de développement neuf du lot.
+- Le WAF n'autorisait par défaut que GET/HEAD/POST/OPTIONS (OWASP CRS) : toute future route qui
+  utiliserait PUT (pas seulement PATCH/DELETE, déjà couverts) la verrait aussi bloquée en 403
+  avant payment-api, sans erreur applicative pour orienter le diagnostic (juste une page nginx
+  générique). Pense à `infra/waf/modsecurity-exclusions.conf` si ça arrive.
 - `graphify-out` non localisé : si ce dossier doit vraiment être exclu de l'archive, il faut
   d'abord le faire apparaître (générer, ou retrouver où il doit se créer) avant de pouvoir
   vérifier son exclusion.

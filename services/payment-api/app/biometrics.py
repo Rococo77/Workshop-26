@@ -66,6 +66,20 @@ def replace_enrollment(username: str, model_name: str, poses: dict[str, list[flo
     return True
 
 
+def delete_enrollment(username: str) -> bool:
+    """Back-office (§10.1) : réinitialise le visage d'un client (le pool est
+    entièrement supprimé, à charge pour lui de le recréer — mot de passe
+    d'abord, cf. `db.customer_needs_reenrollment`). `False` si l'utilisateur
+    n'avait rien enrôlé (pas une erreur, juste rien à faire)."""
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM face_enrollment WHERE user_id = "
+            "(SELECT id FROM app_user WHERE username = %s)",
+            (username,),
+        )
+        return cur.rowcount > 0
+
+
 def log_attempt(
     username: str, *, purpose: str, result: str, distance: float | None, tx_id: int | None = None
 ) -> None:

@@ -6,6 +6,8 @@ Endpoints publics (via WAF) : /health, /auth/register, /auth/login/identify,
 /face/enrollment et
 /transactions/{id}/confirm|cancel (validation faciale), /ws/face-events
 (relais temps réel vers l'indicateur LED ESP8266, voir firmware/face-led/).
+Back-office (rôle admin, §10.1) : /admin/users (liste), PATCH /admin/users/
+{username} (verrouillage, rôle), /admin/users/{username}/face (reset visage).
 Endpoint interne (non exposé au réseau pédagogique) : /internal/canary,
 utilisé par le moteur de remédiation pour prouver le retour à un état
 utilisable (transaction canari réelle en base).
@@ -39,6 +41,7 @@ from .auth import (
     create_access_token,
     create_pending_face_token,
     create_pending_password_token,
+    current_admin,
     current_customer,
     current_pending_face,
     current_pending_password,
@@ -227,10 +230,17 @@ def register(req: RegisterRequest) -> dict:
 @app.post("/auth/login/identify")
 def login_identify(req: IdentifyRequest) -> dict:
     """Étape 1 du parcours client (§10.1 : identifiant -> caméra -> visage ->
-    mot de passe). Jeton `face_pending` toujours émis, que l'identifiant
-    existe ou non : pas d'oracle d'existence ici, un identifiant invalide ou
-    un client sans visage enrôlé échouera simplement à l'étape suivante
-    (403 face_not_enrolled / face_mismatch)."""
+    mot de passe). Jeton `face_pending` émis par défaut, que l'identifiant
+    existe ou non (pas d'oracle d'existence sur ce cas-là : un identifiant
+    invalide échoue simplement à l'étape suivante, 403 face_not_enrolled).
+
+    Exception volontaire : si le back-office a réinitialisé le visage d'un
+    client (plus aucune empreinte enrôlée), la caméra n'a plus rien à
+    vérifier — on saute directement au mot de passe (jeton `password_pending`)
+    et le front invite explicitement à ré-enregistrer le visage ensuite."""
+    if db.customer_needs_reenrollment(req.username):
+        token = create_pending_password_token(subject=req.username, role="customer")
+        return {"status": "password_required_reenroll", "pending_token": token}
     token = create_pending_face_token(subject=req.username, role="customer")
     return {"status": "face_required", "pending_token": token}
 
@@ -248,12 +258,17 @@ def login_face(req: FaceImage, principal: Principal = Depends(current_pending_fa
         settings.login_lockout_failures
     ):
         log.warning("login lockout user=%s", user)
+        events.publish({"purpose": "login", "state": "locked"})
         raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "login_locked")
+
+    events.publish({"purpose": "login", "state": "checking"})
 
     enrollment = biometrics.get_enrollment(user)
     if enrollment is None:
+        events.publish({"purpose": "login", "state": "fail"})
         raise _face_error(status.HTTP_403_FORBIDDEN, "face_not_enrolled")
     if enrollment["model_name"] != settings.face_model:
+        events.publish({"purpose": "login", "state": "fail"})
         raise _face_error(status.HTTP_409_CONFLICT, "face_reenrollment_required")
 
     distance: float | None = None
@@ -263,6 +278,9 @@ def login_face(req: FaceImage, principal: Principal = Depends(current_pending_fa
         result = "match" if face.is_match(distance) else "mismatch"
     except face.FaceRejected as exc:
         if exc.code != "spoof":
+            # Photo inexploitable (pas de visage, floue...) : pas un essai
+            # compté, pas un échec affiché non plus (retour à l'état neutre).
+            events.publish({"purpose": "login", "state": "idle"})
             raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
         result = "spoof"
 
@@ -277,7 +295,7 @@ def login_face(req: FaceImage, principal: Principal = Depends(current_pending_fa
     if result != "match":
         # Échec définitif de cette étape (pas seulement "en attente du mot de
         # passe") : la LED/l'indicateur doit refléter l'échec maintenant.
-        events.publish({"ok": False, "purpose": "login"})
+        events.publish({"purpose": "login", "state": "fail"})
         FACE_VERIFICATIONS.labels(purpose="login", result=result).inc()
         left = settings.login_lockout_failures - biometrics.recent_failures(
             user, settings.login_lockout_minutes, purpose="login"
@@ -286,7 +304,8 @@ def login_face(req: FaceImage, principal: Principal = Depends(current_pending_fa
         raise _face_error(status.HTTP_403_FORBIDDEN, code, attempts_left=max(0, left))
 
     # Visage reconnu, mais le login n'est pas encore complet (mot de passe à
-    # venir) : pas d'événement "ok" ici, ce serait prématuré.
+    # venir) : retour à l'état neutre, pas "ok" (ce serait prématuré).
+    events.publish({"purpose": "login", "state": "idle"})
     FACE_VERIFICATIONS.labels(purpose="login", result="match").inc()
     token = create_pending_password_token(subject=user, role=principal.role)
     return {"status": "password_required", "pending_token": token}
@@ -553,6 +572,76 @@ def face_enroll(req: PoseImages, principal: Principal = Depends(current_customer
     FACE_VERIFICATIONS.labels(purpose="enroll", result="enrolled").inc()
     log.info("face enrolled user=%s model=%s", user, settings.face_model)
     return {"enrolled": True}
+
+
+# ------------------------------------------------- Back-office (admin, §10.1)
+_VALID_ROLES = frozenset({"customer", "operator", "admin"})
+
+
+class UserPatch(BaseModel):
+    # Les deux sont optionnels mais au moins un est requis (cf. validation
+    # dans la route) : un PATCH ne fait qu'une chose à la fois ou les deux.
+    locked: bool | None = None
+    role: str | None = None
+
+
+@app.get("/admin/users")
+def admin_list_users(_: Principal = Depends(current_admin)) -> list[dict]:
+    """Liste tous les comptes (rôle, verrouillage, état du visage enrôlé)."""
+    try:
+        return db.list_users()
+    except Exception as exc:
+        log.error("admin user list failed: %s", exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
+
+
+@app.patch("/admin/users/{username}")
+def admin_update_user(
+    username: str, req: UserPatch, admin: Principal = Depends(current_admin)
+) -> dict:
+    """Verrouille/déverrouille un compte et/ou change son rôle. Un admin ne
+    peut pas s'auto-modifier (évite de se verrouiller ou de se rétrograder
+    par erreur, seul moyen de s'en sortir serait un accès direct à la base)."""
+    if req.locked is None and req.role is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "nothing to update")
+    if req.role is not None and req.role not in _VALID_ROLES:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid role")
+    if username == admin.username:
+        raise HTTPException(status.HTTP_409_CONFLICT, "cannot modify your own account")
+
+    try:
+        if req.locked is not None and not db.set_account_locked(username, req.locked):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+        if req.role is not None and not db.set_account_role(username, req.role):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("admin user update failed username=%s: %s", username, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
+
+    log.warning(
+        "admin user update by=%s username=%s locked=%s role=%s",
+        admin.username,
+        username,
+        req.locked,
+        req.role,
+    )
+    return {"username": username, "locked": req.locked, "role": req.role}
+
+
+@app.delete("/admin/users/{username}/face")
+def admin_reset_face(username: str, admin: Principal = Depends(current_admin)) -> dict:
+    """Réinitialise le visage d'un client : à sa prochaine connexion, il devra
+    ressaisir son mot de passe puis réenregistrer son visage (voir
+    `login_identify` / `db.customer_needs_reenrollment`)."""
+    try:
+        reset = biometrics.delete_enrollment(username)
+    except Exception as exc:
+        log.error("admin face reset failed username=%s: %s", username, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
+    log.warning("admin face reset by=%s username=%s reset=%s", admin.username, username, reset)
+    return {"username": username, "reset": reset}
 
 
 @app.get("/transactions")

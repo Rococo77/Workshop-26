@@ -106,7 +106,9 @@ function Login({ onLogin, onGoToRegister }) {
   // Parcours imposé (§10.1) : identifiant -> caméra/visage -> mot de passe.
   // "identify" : identifiant seul. "face" : jeton face_pending (token émis
   // par /auth/login/identify). "password" : jeton password_pending (émis
-  // par /auth/login/face une fois le visage reconnu).
+  // par /auth/login/face une fois le visage reconnu, ou directement par
+  // /auth/login/identify si le back-office a réinitialisé le visage du
+  // client — `reenroll: true` dans ce dernier cas, pas de visage à vérifier).
   const [step, setStep] = useState({ name: "identify" });
 
   const submitIdentify = async (e) => {
@@ -115,7 +117,11 @@ function Login({ onLogin, onGoToRegister }) {
     setError(null);
     try {
       const res = await identify(username.trim());
-      setStep({ name: "face", token: res.pending_token, attempt: 0 });
+      if (res.status === "password_required_reenroll") {
+        setStep({ name: "password", token: res.pending_token, reenroll: true });
+      } else {
+        setStep({ name: "face", token: res.pending_token, attempt: 0 });
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -184,7 +190,14 @@ function Login({ onLogin, onGoToRegister }) {
 
   if (step.name === "password") {
     return (
-      <AuthShell title="Dernière étape" subtitle="Entrez votre mot de passe pour finaliser la connexion.">
+      <AuthShell
+        title="Dernière étape"
+        subtitle={
+          step.reenroll
+            ? "Vos coordonnées visage nécessitent d'être refaites : saisissez votre mot de passe, puis vous réenregistrerez votre visage."
+            : "Entrez votre mot de passe pour finaliser la connexion."
+        }
+      >
         <form onSubmit={submitPassword} className="space-y-5">
           <div>
             <label htmlFor="password" className="block text-sm font-medium">
