@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-change-me"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 30
-    # Jeton intermédiaire émis par `auth` après le mot de passe, avant le
-    # second facteur (visage) : durée de vie volontairement courte.
+    # Jetons intermédiaires du parcours client (§10.1 : identifiant -> visage
+    # -> mot de passe), émis par ce service entre deux étapes : durée de vie
+    # volontairement courte.
     face_pending_expire_seconds: int = 120
 
     # Auto-inscription (mot de passe + visage, POST /auth/register).
@@ -42,9 +43,16 @@ class Settings(BaseSettings):
     face_match_threshold: float = 0.30
     face_confirm_ttl_seconds: int = 300
     face_max_attempts_per_tx: int = 3
-    # Verrou anti-force brute : N échecs sur la fenêtre -> 429.
+    # Verrou anti-force brute : N échecs sur la fenêtre -> 429. Confirmation
+    # de virement uniquement (purpose='confirm') : le login a son propre
+    # seuil ci-dessous, plus strict (§10.1).
     face_lockout_failures: int = 5
     face_lockout_minutes: int = 15
+    # Login (identifiant -> visage -> mot de passe, purpose='login') : 2
+    # tentatives AU TOTAL (visage + mot de passe confondus, compteur
+    # partagé), puis 5 min de blocage (§10.1).
+    login_lockout_failures: int = 2
+    login_lockout_minutes: int = 5
 
     # Mode dégradé (file d'attente pendant une remédiation) : piloté par le
     # moteur de remédiation, seul détenteur de ce jeton interne.

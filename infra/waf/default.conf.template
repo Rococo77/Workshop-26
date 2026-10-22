@@ -83,8 +83,10 @@ server {
     # -> délai plus long et cible de force brute -> zone stricte. Limite de
     # corps relevée UNIQUEMENT ici (5 photos ~60 Ko chacune en base64 ;
     # 128 Ko par défaut suffit à 1 photo mais pas à 5) ; ailleurs, la limite
-    # reste stricte (anti-abus). Regex : prioritaire sur /api/.
-    location ~ ^/api/(face/enrollment|transactions/[0-9]+/confirm|auth/register|auth/login/face)$ {
+    # reste stricte (anti-abus). `auth/login/identify` et `auth/login/password`
+    # n'embarquent pas de photo mais appartiennent au même parcours sensible
+    # (§10.1) : même zone stricte. Regex : prioritaire sur /api/.
+    location ~ ^/api/(face/enrollment|transactions/[0-9]+/confirm|auth/register|auth/login/(identify|face|password))$ {
         limit_req zone=face burst=5 nodelay;
         client_max_body_size 400k;
         modsecurity_rules 'SecRequestBodyNoFilesLimit 409600';

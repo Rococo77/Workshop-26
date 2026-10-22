@@ -10,6 +10,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+# Numéro de groupe (NUM_GROUPE du .env) : embarqué au build par Vite, lu en
+# front via import.meta.env.VITE_NUM_GROUPE (pas d'accès à l'env à l'exécution,
+# l'image finale ne sert que du statique via nginx).
+ARG VITE_NUM_GROUPE
+ENV VITE_NUM_GROUPE=$VITE_NUM_GROUPE
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.30.6-alpine3.24

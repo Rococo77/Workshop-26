@@ -12,6 +12,11 @@ ENV MODSEC_RULE_ENGINE=On \
 # include dynamique de la blocklist alimentée par le moteur de remédiation.
 COPY default.conf.template /etc/nginx/templates/conf.d/default.conf.template
 
+# Exclusions locales CRS (méthodes HTTP additionnelles pour le back-office,
+# §10.1) : point de personnalisation officiel de l'image, lu avant les
+# règles numérotées de la CRS (voir le fichier pour le détail).
+COPY modsecurity-exclusions.conf /etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
+
 # Répertoire des règles dynamiques (blocklist), dans /etc/nginx possédé par nginx.
 RUN mkdir -p /etc/nginx/dynamic
 

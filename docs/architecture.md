@@ -24,7 +24,7 @@ décision → remédiation → vérification**, sans intervention humaine.
 │ [biometric]              │   face-api (DeepFace)    │                │          │
 │ [data]                   └──── PostgreSQL ──────────┘                │          │
 │                                                                      │          │
-│ [obs]    waf-metrics · Prometheus · Promtail · Loki · Grafana :3000 ◀┘          │
+│ [obs]    waf-metrics · Prometheus · Promtail · Loki · Grafana 127.0.0.1:3000 ◀┘ │
 │                 │ features + journaux                                           │
 │ [control]  ml-detector ──incident──▶ remediation-engine ──▶ docker-socket-proxy │
 │                                        │  block IP (WAF) · restart · canari      │
@@ -132,7 +132,9 @@ front ──photo──▶ POST /transactions/{id}/confirm ▶ payment-api ─�
 - `FACE_CONFIRMATION_REQUIRED=false` restaure le règlement immédiat.
 
 La base, les secrets et les interfaces de gestion **ne sont pas publiés** sur le
-réseau pédagogique : seul le WAF (et Grafana pour l'observation jury) est exposé.
+réseau pédagogique : seul le WAF est exposé. Grafana reste local au PC Hôte
+(127.0.0.1), comme Vault et le RAG ; le jury observe la reprise via le dashboard
+React servi par le WAF.
 
 ## 4. Cycle de vie d'un incident (reprise autonome)
 

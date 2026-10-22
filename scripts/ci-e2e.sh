@@ -83,12 +83,14 @@ REG_BODY=$(curl -s -X POST "$BASE/api/auth/register" -H 'Content-Type: applicati
 REG_TOKEN=$(echo "$REG_BODY" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
 [ -n "$REG_TOKEN" ] && ok "auto-inscription (mot de passe + visage)" || ko "auto-inscription : $REG_BODY"
 
-log "Connexion — mot de passe puis second facteur (même photo, déterministe)"
-LOGIN_BODY=$(curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
-  -d '{"username":"'"$E2E_USER"'","password":"Alice#2026"}')
-PENDING=$(echo "$LOGIN_BODY" \
-  | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("pending_token") or "")' 2>/dev/null)
-[ -n "$PENDING" ] && ok "login (mot de passe) -> second facteur requis" || ko "login : $LOGIN_BODY"
+log "Connexion — parcours imposé §10.1 : identifiant, visage, puis mot de passe"
+pending() { python3 -c 'import sys,json;print(json.load(sys.stdin).get("pending_token",""))' 2>/dev/null; }
+
+# Étape 1 : identifiant -> jeton face_pending.
+ID_BODY=$(curl -s -X POST "$BASE/api/auth/login/identify" -H 'Content-Type: application/json' \
+  -d '{"username":"'"$E2E_USER"'"}')
+PENDING_FACE=$(echo "$ID_BODY" | pending)
+[ -n "$PENDING_FACE" ] && ok "login 1/3 (identifiant) -> visage requis" || ko "identify : $ID_BODY"
 
 TMP_FACE_JSON="$(mktemp)"
 python3 - "$TMP_FACE_JSON" <<'PY'
@@ -96,10 +98,17 @@ import base64, json, sys
 img = base64.b64encode(open("tests/fixtures/sample-face.jpg", "rb").read()).decode()
 json.dump({"image": img}, open(sys.argv[1], "w"))
 PY
+# Étape 2 : visage -> jeton password_pending.
 FACE_BODY=$(curl -s -X POST "$BASE/api/auth/login/face" -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $PENDING" --data-binary @"$TMP_FACE_JSON")
-TOKEN=$(echo "$FACE_BODY" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
-[ -n "$TOKEN" ] && ok "login (second facteur visage)" || ko "login/face : $FACE_BODY"
+  -H "Authorization: Bearer $PENDING_FACE" --data-binary @"$TMP_FACE_JSON")
+PENDING_PWD=$(echo "$FACE_BODY" | pending)
+[ -n "$PENDING_PWD" ] && ok "login 2/3 (visage) -> mot de passe requis" || ko "login/face : $FACE_BODY"
+
+# Étape 3 : mot de passe -> access_token (le mot de passe n'ouvre jamais seul).
+PWD_BODY=$(curl -s -X POST "$BASE/api/auth/login/password" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PENDING_PWD" -d '{"password":"Alice#2026"}')
+TOKEN=$(echo "$PWD_BODY" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)
+[ -n "$TOKEN" ] && ok "login 3/3 (mot de passe) -> session ouverte" || ko "login/password : $PWD_BODY"
 
 log "État nominal — transaction canari"
 canary() {

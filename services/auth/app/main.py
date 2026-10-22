@@ -14,7 +14,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from pydantic import BaseModel, Field
 
 from . import db
-from .security import create_access_token, create_pending_face_token, verify_password
+from .security import create_access_token, verify_password
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("auth")
@@ -39,12 +39,6 @@ class TokenResponse(BaseModel):
     role: str
 
 
-class FaceRequiredResponse(BaseModel):
-    status: str = "face_required"
-    pending_token: str
-    role: str
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -56,12 +50,12 @@ def metrics() -> Response:
 
 
 @app.post("/login")
-def login(req: LoginRequest, request: Request) -> TokenResponse | FaceRequiredResponse:
-    """Mot de passe seul pour operator/admin (pas de compte bancaire, pas de
-    visage enrôlé). Pour un client (`customer`), le mot de passe n'ouvre
-    qu'un jeton intermédiaire `face_pending` : le second facteur (visage)
-    est vérifié par payment-api, seul service relié à `face-api`
-    (POST /auth/login/face), qui émet alors le jeton d'accès complet."""
+def login(req: LoginRequest, request: Request) -> TokenResponse:
+    """Réservé à operator/admin (pas de compte bancaire, pas de visage
+    enrôlé) : mot de passe seul, utilisé par l'écran de supervision. Le
+    parcours client (identifiant -> visage -> mot de passe, §10.1) vit
+    entièrement dans payment-api (POST /auth/login/identify|face|password),
+    seul service relié à `face-api` et à la table `face_enrollment`."""
     try:
         honeytoken = db.is_honeytoken(req.username)
         user = None if honeytoken else db.fetch_user(req.username)
@@ -81,10 +75,16 @@ def login(req: LoginRequest, request: Request) -> TokenResponse | FaceRequiredRe
             req.username,
             request.headers.get("x-real-ip", "-"),
         )
-    if user is None or not verify_password(req.password, user["password_hash"]):
+    if (
+        user is None
+        or not verify_password(req.password, user["password_hash"])
+        or user["role"] == "customer"
+    ):
+        # `customer` inclus ici (pas de branche dédiée) : ce compte doit
+        # passer par payment-api, pas par cet endpoint -> même message
+        # générique, pas d'oracle sur l'existence ou le rôle du compte.
         LOGIN_ATTEMPTS.labels(result="failure").inc()
         LOGIN_FAILURES.labels(reason="bad_credentials").inc()
-        # Message volontairement générique (pas d'oracle username/password).
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
     if user["locked"]:
@@ -92,22 +92,9 @@ def login(req: LoginRequest, request: Request) -> TokenResponse | FaceRequiredRe
         LOGIN_FAILURES.labels(reason="locked").inc()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "account locked")
 
-    if user["role"] != "customer":
-        LOGIN_ATTEMPTS.labels(result="success").inc()
-        token = create_access_token(subject=user["username"], role=user["role"])
-        return TokenResponse(access_token=token, role=user["role"])
-
-    if not db.has_face_enrollment(user["username"]):
-        # Ne devrait pas arriver (l'auto-inscription enrôle le visage dans
-        # le même appel) : garde-fou, pas un cas nominal.
-        LOGIN_ATTEMPTS.labels(result="failure").inc()
-        LOGIN_FAILURES.labels(reason="face_not_enrolled").inc()
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "face verification not configured")
-
-    # Mot de passe correct mais second facteur requis : pas un échec.
-    LOGIN_ATTEMPTS.labels(result="pending_face").inc()
-    pending = create_pending_face_token(subject=user["username"], role=user["role"])
-    return FaceRequiredResponse(pending_token=pending, role=user["role"])
+    LOGIN_ATTEMPTS.labels(result="success").inc()
+    token = create_access_token(subject=user["username"], role=user["role"])
+    return TokenResponse(access_token=token, role=user["role"])
 
 
 @app.exception_handler(Exception)

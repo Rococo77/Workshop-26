@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getOverview, getReport, login, summarizeReport } from "./api.js";
+import { getOverview, getReport, listUsers, login, resetCustomerFace, summarizeReport, updateUser } from "./api.js";
 import ScoreChart from "./components/ScoreChart.jsx";
 
 // Supervision de la reprise (jury, opérateur) : raconte l'incident avant /
@@ -63,23 +63,27 @@ function phaseOf(data, now, proof) {
   return { kind: "nominal" };
 }
 
-// Jeton opérateur conservé le temps de l'onglet (rechargement sans reconnexion).
+// Session opérateur conservée le temps de l'onglet (rechargement sans
+// reconnexion) : jeton + rôle (afficher ou non le back-office, réservé à
+// admin) + identifiant (exclure l'auto-modification dans le back-office —
+// affichage seulement, l'API refuse de toute façon côté serveur).
 const TOKEN_KEY = "ra-supervision-token";
-export function saveSupervisionToken(token) {
+function saveSupervisionSession(token, role, username) {
   try {
-    sessionStorage.setItem(TOKEN_KEY, token);
+    sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token, role, username }));
   } catch {
     // stockage indisponible (navigation privée) : reconnexion au rechargement
   }
 }
-function readSupervisionToken() {
+function readSupervisionSession() {
   try {
-    return sessionStorage.getItem(TOKEN_KEY);
+    const raw = sessionStorage.getItem(TOKEN_KEY);
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
-function clearSupervisionToken() {
+function clearSupervisionSession() {
   try {
     sessionStorage.removeItem(TOKEN_KEY);
   } catch {
@@ -147,27 +151,35 @@ function useRecoveryClock(data, events) {
 
 // Accès réservé aux rôles operator et admin (vérifié aussi côté BFF).
 export default function Supervision() {
-  const [token, setToken] = useState(readSupervisionToken);
+  const [session, setSession] = useState(readSupervisionSession);
   const [notice, setNotice] = useState(null);
   const onAuthError = useCallback((message) => {
-    clearSupervisionToken();
+    clearSupervisionSession();
     setNotice(message);
-    setToken(null);
+    setSession(null);
   }, []);
 
-  if (!token) {
+  if (!session) {
     return (
       <SupervisionLogin
         notice={notice}
-        onLogin={(t) => {
-          saveSupervisionToken(t);
+        onLogin={(token, role, username) => {
+          saveSupervisionSession(token, role, username);
           setNotice(null);
-          setToken(t);
+          setSession({ token, role, username });
         }}
       />
     );
   }
-  return <Console token={token} onAuthError={onAuthError} onLogout={() => onAuthError(null)} />;
+  return (
+    <Console
+      token={session.token}
+      role={session.role}
+      selfUsername={session.username}
+      onAuthError={onAuthError}
+      onLogout={() => onAuthError(null)}
+    />
+  );
 }
 
 function SupervisionLogin({ notice, onLogin }) {
@@ -187,7 +199,7 @@ function SupervisionLogin({ notice, onLogin }) {
         setPending(false);
         return;
       }
-      onLogin(res.access_token);
+      onLogin(res.access_token, res.role, username.trim());
     } catch (err) {
       setError(err.message);
       setPending(false);
@@ -245,7 +257,7 @@ function SupervisionLogin({ notice, onLogin }) {
   );
 }
 
-function Console({ token, onAuthError, onLogout }) {
+function Console({ token, role, selfUsername, onAuthError, onLogout }) {
   const { data, samples, stale, lastOk, now } = useSupervision(token, onAuthError);
   const events = data?.remediation?.events || [];
   const { startedAt, proof, measured } = useRecoveryClock(data, events);
@@ -259,6 +271,11 @@ function Console({ token, onAuthError, onLogout }) {
       <header className="border-b border-rule bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-4">
           <span className="text-xl font-bold tracking-tight text-petrol">Alpha</span>
+          {import.meta.env.VITE_NUM_GROUPE && (
+            <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
+              Groupe {import.meta.env.VITE_NUM_GROUPE}
+            </span>
+          )}
           <span className="font-medium">Supervision de la reprise</span>
           <span className="ml-auto text-sm text-ink/60" aria-live="polite">
             {stale
@@ -314,6 +331,8 @@ function Console({ token, onAuthError, onLogout }) {
               </ol>
             )}
           </section>
+
+          {role === "admin" && <AdminPanel token={token} selfUsername={selfUsername} />}
         </div>
 
         <aside className="space-y-8">
@@ -338,6 +357,160 @@ function Console({ token, onAuthError, onLogout }) {
         </aside>
       </main>
     </div>
+  );
+}
+
+const ROLES = ["customer", "operator", "admin"];
+
+// Back-office (§10.1, rôle admin uniquement) : tous les comptes, verrouillage,
+// rôle et réinitialisation du visage enrôlé. L'API revérifie tout côté
+// serveur (current_admin, garde-fou anti-auto-modification) : ce composant
+// ne fait qu'afficher et confirmer, aucune décision de sécurité ici.
+function AdminPanel({ token, selfUsername }) {
+  const [users, setUsers] = useState(null);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [pending, setPending] = useState(null); // identifiant dont une action est en cours
+
+  const load = useCallback(async () => {
+    try {
+      setUsers(await listUsers(token));
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const withPending = async (username, action, successMessage) => {
+    setPending(username);
+    setNotice(null);
+    try {
+      await action();
+      setNotice(successMessage);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const handleReset = (username) => {
+    if (
+      !window.confirm(
+        `Réinitialiser le visage de ${username} ? À sa prochaine connexion, il devra ressaisir ` +
+          "son mot de passe puis réenregistrer son visage.",
+      )
+    ) {
+      return;
+    }
+    withPending(username, () => resetCustomerFace(token, username), `Visage réinitialisé pour ${username}.`);
+  };
+
+  const handleToggleLock = (username, locked) => {
+    const verb = locked ? "Verrouiller" : "Déverrouiller";
+    if (!window.confirm(`${verb} le compte ${username} ?`)) return;
+    withPending(
+      username,
+      () => updateUser(token, username, { locked }),
+      `Compte ${username} ${locked ? "verrouillé" : "déverrouillé"}.`,
+    );
+  };
+
+  const handleRoleChange = (username, role) => {
+    if (!window.confirm(`Changer le rôle de ${username} en « ${role} » ?`)) return;
+    withPending(username, () => updateUser(token, username, { role }), `Rôle de ${username} : ${role}.`);
+  };
+
+  return (
+    <section aria-labelledby="admin-title">
+      <h2 id="admin-title" className="text-lg font-semibold">
+        Back-office — comptes
+      </h2>
+      <p className="mt-1 text-sm text-ink/60">
+        Changer un rôle ou (dé)verrouiller un compte prend effet immédiatement. Réinitialiser le
+        visage d&apos;un client force un ré-enregistrement (mot de passe, puis nouvelles photos) à
+        sa prochaine connexion.
+      </p>
+      <div aria-live="polite">
+        {error && <p className="mt-3 rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
+        {notice && <p className="mt-3 rounded-xl bg-credit/10 px-4 py-3 text-sm text-credit">{notice}</p>}
+      </div>
+      <div className="mt-4 overflow-x-auto rounded-2xl border border-rule bg-white">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-rule text-ink/60">
+              <th className="px-4 py-2 font-medium">Identifiant</th>
+              <th className="px-4 py-2 font-medium">Rôle</th>
+              <th className="px-4 py-2 font-medium">Visage enrôlé</th>
+              <th className="px-4 py-2 font-medium">Compte</th>
+              <th className="px-4 py-2" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-rule">
+            {(users || []).map((u) => {
+              const isSelf = u.username === selfUsername;
+              const busy = pending === u.username;
+              return (
+                <tr key={u.username}>
+                  <td className="px-4 py-2">
+                    {u.username}
+                    {isSelf && <span className="ml-2 text-xs text-ink/40">(vous)</span>}
+                  </td>
+                  <td className="px-4 py-2">
+                    <select
+                      value={u.role}
+                      disabled={isSelf || busy}
+                      onChange={(e) => handleRoleChange(u.username, e.target.value)}
+                      className="rounded-lg border border-rule bg-white px-2 py-1 disabled:opacity-50"
+                    >
+                      {ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-4 py-2">
+                    {u.enrolled ? `Oui, depuis le ${new Date(u.enrolled_at).toLocaleString("fr-FR")}` : "Non"}
+                  </td>
+                  <td className="px-4 py-2">{u.locked ? "Verrouillé" : "Actif"}</td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right">
+                    <button
+                      type="button"
+                      disabled={isSelf || busy}
+                      onClick={() => handleToggleLock(u.username, !u.locked)}
+                      className="mr-4 font-medium text-petrol hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {u.locked ? "Déverrouiller" : "Verrouiller"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!u.enrolled || busy}
+                      onClick={() => handleReset(u.username)}
+                      className="font-medium text-debit hover:underline disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Réinitialiser le visage
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {users && users.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-6 text-center text-ink/60">
+                  Aucun compte.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
