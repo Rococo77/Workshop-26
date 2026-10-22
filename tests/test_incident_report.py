@@ -46,3 +46,12 @@ def test_markdown_format_notification_initiale():
     assert "192.168.137.42" in md
     assert "10:15:42 : transaction canari réussie" in md
     assert "à compléter" in md  # classification « majeur » : décision humaine
+
+
+def test_compromission_sans_temps_de_reprise():
+    """Fuite de données : le service n'est pas tombé, le rapport ne parle pas
+    de « reprise » mais de compromission à traiter."""
+    ev = {**EVENT, "type": "honeytoken_triggered", "timeline": EVENT["timeline"][:1]}
+    md = report.to_markdown(report.build(ev))
+    assert "sans objet (service resté disponible)" in md
+    assert "compromission à traiter" in md
