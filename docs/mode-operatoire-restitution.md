@@ -31,54 +31,98 @@ Ordre interne recommandé : **auth → payment-api → firmware → frontend**, 
 frontend ne fait qu'afficher ce que l'API renvoie ; le modifier avant que le backend soit
 conforme produirait un flux qui *a l'air* correct sans l'être.
 
-### 1.1 — Ordre des facteurs : identifiant → caméra → visage → mot de passe
+### 1.1 — Ordre des facteurs : identifiant → caméra → visage → mot de passe ✅ FAIT
 
-- **Écart actuel** : `services/auth/app/main.py:55-96` valide le mot de passe en premier
-  (`verify_password`) et ne renvoie `pending_face` qu'après — donc *mot de passe avant visage*,
+- **Écart initial** : `services/auth/app/main.py:55-96` validait le mot de passe en premier
+  (`verify_password`) et ne renvoyait `pending_face` qu'après — donc *mot de passe avant visage*,
   l'inverse de la consigne.
-- **Impact** : c'est un changement de contrat d'API (`POST /login` ne doit plus accepter de
-  mot de passe au premier appel pour un `customer`), donc ça touche aussi `services/payment-api`
-  (qui vérifie le visage via `POST /auth/login/face`, cf. `config.py:33-47`) et le frontend
-  (`services/frontend/src/App.jsx`, formulaire `submitPassword` ligne 84).
+- **Conception retenue** (légèrement différente de la piste initiale ci-dessous, cf. bullet 2) :
+  tout le parcours client (identifiant → visage → mot de passe) vit désormais dans
+  `payment-api`, avec deux jetons intermédiaires à usage unique (`face_pending` puis
+  `password_pending`). `auth` ne garde que le login operator/admin (mot de passe seul,
+  `/supervision`). Pas de nouvel appel réseau entre services : secret JWT et base Postgres déjà
+  partagés.
 - **Actions** :
-  - [ ] Définir le nouveau contrat : `POST /auth/login/identify` (identifiant seul) → déclenche
-        l'ouverture caméra côté client → `POST /auth/login/face` (vérif visage) → si OK,
-        `POST /auth/login/password` (mot de passe) → jeton final.
-  - [ ] Adapter `services/auth/app/main.py` et `services/auth/app/security.py` pour scinder
-        la création du jeton intermédiaire (après visage, plus après mot de passe).
-  - [ ] Adapter `services/payment-api` si c'est lui qui orchestre l'appel à `face-api` (vérifier
-        qui appelle qui — actuellement c'est payment-api qui parle à face-api, pas auth).
-  - [ ] Adapter `services/frontend/src/App.jsx` : écran 1 = identifiant seul, écran 2 = caméra,
-        écran 3 = mot de passe (seulement si écran 2 OK).
-  - [ ] Test E2E à mettre à jour en conséquence (voir dossier de tests existant).
+  - [x] Nouveau contrat défini : `POST /auth/login/identify` (identifiant seul, `payment-api`,
+        jamais d'échec — pas d'oracle d'existence) → `POST /auth/login/face` (vérif visage,
+        émet maintenant `password_pending` au lieu du jeton final) → `POST /auth/login/password`
+        (mot de passe, émet le jeton final).
+  - [x] `services/auth/app/main.py` + `security.py` + `db.py` : la branche `customer` et
+        `create_pending_face_token`/`has_face_enrollment` ont été **supprimées** (pas scindées —
+        ce service ne gère plus du tout le visage). `/login` ne reste que pour operator/admin.
+  - [x] `services/payment-api` : `app/auth.py` (2 jetons + 2 dépendances `current_pending_*`),
+        `app/db.py` (`verify_login_password`, comparaison pgcrypto), `app/main.py` (3 endpoints).
+        Clarifié : c'est bien `payment-api` seul qui porte tout le parcours (DB + face-api déjà
+        accessibles depuis ce service), aucune orchestration croisée avec `auth` nécessaire.
+  - [x] `services/frontend/src/App.jsx` : 3 écrans (`identify`/`face`/`password`), `api.js` mis à
+        jour (`identify`, `loginFace`, `loginPassword`). `infra/waf/default.conf.template` :
+        `auth/login/identify` et `auth/login/password` ajoutés à la zone stricte anti-brute-force.
+  - [x] Tests : `tests/test_auth_self_service.py` — 9 tests ajoutés (2 jetons, symétrie des 4
+        dépendances `current_*`, `verify_login_password`). Suite complète relancée dans le
+        conteneur `payment-api` (deps déjà présentes) : **60 passed, 4 skipped** (skips sans
+        rapport : numpy/sklearn/docker absents du conteneur). Stack redémarrée et testée en
+        direct via le WAF (`/api/auth/login/identify` → 200, ancien `/auth/login` rejette
+        correctement un `customer`).
+  - [x] `README.md` (section Authentification) synchronisé avec le nouveau parcours.
 
-### 1.2 — Visage non reconnu : identifiant vidé + caméra coupée
+**Reste ouvert, pas fait ici** : `docs/architecture.md` §3.1 décrit encore l'ancien flux
+(diagramme `auth {user,pwd}` → jeton pending → visage) — à mettre à jour séparément.
 
-- **Écart actuel** : absent du code (aucune route ni logique ne réinitialise l'identifiant ou
+### 1.2 — Visage non reconnu : identifiant vidé + caméra coupée ✅ FAIT
+
+- **Écart initial** : absent du code (aucune route ni logique ne réinitialise l'identifiant ou
   ne coupe le flux caméra après un échec de reconnaissance).
 - **Actions** :
-  - [ ] Côté API : sur échec de vérification faciale, ne pas renvoyer de jeton réutilisable
-        (déjà le cas) — mais surtout, décider si l'API doit explicitement invalider la session
-        d'identification en cours (le jeton `face_pending` expire déjà à 120 s,
-        `services/payment-api/app/config.py:24` — à vérifier si ça suffit pour "l'identifiant
-        est remis à vide" ou s'il faut un signal explicite consommé côté front).
-  - [ ] Côté frontend : sur réponse d'échec facial, vider le champ identifiant (`setUsername("")`)
-        et arrêter le flux `getUserMedia` (stopper les tracks de la caméra), revenir à l'écran 1.
-  - [ ] Vérifier que le firmware ESP8266 reçoit aussi l'événement d'échec (il le reçoit déjà,
+  - [x] Côté API : pas de nouveau code — le jeton `face_pending` est déjà à usage unique et de
+        courte durée, et surtout le verrou anti-brute-force existant
+        (`biometrics.recent_failures(...)`, `services/payment-api/app/main.py`) compte les
+        échecs **par identifiant**, pas par jeton : ré-identifier pour obtenir un nouveau jeton
+        ne contourne pas le compteur de blocage (1.3, non modifié ici). Pas de session à
+        invalider explicitement au-delà de ça.
+  - [x] Côté frontend (`services/frontend/src/App.jsx`, `submitFace`) : distinction par code
+        d'erreur. Souci de prise de vue (`no_face`, `multiple_faces`, `invalid_image`,
+        `image_too_large` — aucune tentative de reconnaissance comptée côté API) → reprise de
+        la photo sur place. Toute autre erreur (`face_mismatch`, `spoof`, `face_locked`...) →
+        `setUsername("")` + retour à l'étape `identify`, qui démonte `FaceCapture` (la caméra
+        est de toute façon déjà coupée dès la photo prise, `FaceCapture.jsx:30-49` ; le
+        démontage la coupe aussi si elle avait été rallumée).
+  - [x] Firmware ESP8266 : déjà vérifié (reçoit l'événement `{"ok": false}` sur tout échec,
         `onWebSocketEvent`, `firmware/face-led/src/main.cpp:55-79`) — cohérent avec 1.5.
+  - [x] Lint + build Vite local OK, image `frontend` reconstruite et redéployée sur la stack.
 
-### 1.3 — Seuils de blocage : 2 tentatives puis 5 min (au lieu de 5 puis 15 min)
+### 1.3 — Seuils de blocage : 2 tentatives puis 5 min (au lieu de 5 puis 15 min) ✅ FAIT
 
-- **Écart actuel** : `services/payment-api/app/config.py:46-47`
+- **Écart initial** : `services/payment-api/app/config.py:46-47` (avant correction)
   `face_lockout_failures: int = 5`, `face_lockout_minutes: int = 15`.
-- **Action** :
-  - [ ] Changer en `face_lockout_failures: int = 2`, `face_lockout_minutes: int = 5`.
-  - [ ] Vérifier qu'il n'y a pas d'autre endroit qui duplique ces valeurs (tests, `.env.example`,
-        Grafana/alerting si un seuil est câblé en dur côté dashboard SIEM).
-  - [ ] Mettre à jour les tests qui dépendent de ces constantes (ex. tests de brute force E2E).
-  - [ ] Clarifier avec le sujet si "2 tentatives au total" compte le mot de passe + le visage
-        ensemble ou seulement le visage — ça change l'implémentation (compteur unique vs
-        compteur par facteur).
+- **Découverte en creusant** : ce même réglage était aussi utilisé par `confirm_transaction`
+  (confirmation de virement, `purpose='confirm'`) — un compteur indépendant de celui du login,
+  mais avec les MÊMES valeurs seuils. Changer la valeur globalement aurait aussi resserré le
+  virement à 2/5 min, ce que le sujet ne demande pas (§10.1 ne parle que du login).
+- **Décision prise sur la question ouverte** ("au total" = visage + mot de passe confondus) :
+  **oui, compteur unique partagé**, lecture la plus naturelle de "2 tentatives au total" compte
+  tenu du nouvel ordre des facteurs (1.1). À corriger si le texte réel du sujet dit autre chose.
+- **Actions** :
+  - [x] Nouveau réglage dédié au login, séparé de celui du virement :
+        `login_lockout_failures: int = 2`, `login_lockout_minutes: int = 5`
+        (`services/payment-api/app/config.py`). `face_lockout_failures`/`face_lockout_minutes`
+        (5/15) restent inchangés, utilisés uniquement par `confirm_transaction`.
+  - [x] `biometrics.recent_failures()` compte désormais aussi `result='password_mismatch'`
+        (en plus de `mismatch`/`spoof`) pour `purpose='login'` : un échec de mot de passe
+        consomme le même budget qu'un visage non reconnu.
+  - [x] `login_face` et le nouveau `login_password` (`services/payment-api/app/main.py`)
+        vérifient tous les deux `login_lockout_failures`/`login_lockout_minutes` avant de
+        traiter la tentative, et journalisent l'échec (`log_attempt(..., purpose="login")`)
+        sinon. Code d'erreur dédié `login_locked` (429) distinct de `face_locked` (confirmation
+        de virement, toujours 15 min) pour que le message affiché reste exact dans les deux cas.
+  - [x] Frontend (`services/frontend/src/api.js`) : codes `login_locked` et `invalid_credentials`
+        ajoutés à `FACE_CODES` ; suppression du `.catch` ad-hoc de `loginPassword` qui aurait
+        sinon écrasé `err.code`/`attemptsLeft`.
+  - [x] Vérifié : pas de duplication de ces seuils dans `.env.example`/`docker-compose.yml`
+        (jamais exposés en variable d'environnement, avant comme après) ni dans les dashboards
+        Grafana.
+  - [x] Tests : 2 ajoutés (`recent_failures` compte bien `password_mismatch`, valeurs par défaut
+        2/5 vs 5/15 figées en dur). Suite complète : **62 passed, 4 skipped** (skips sans
+        rapport). Images `payment-api`/`frontend` reconstruites et redéployées.
 
 ### 1.4 — Écran back-office : administration reconnaissance faciale + habilitations
 
@@ -220,9 +264,10 @@ conforme produirait un flux qui *a l'air* correct sans l'être.
 
 - Le §10.1 n'a été relu qu'à travers ton relevé — si le texte exact diffère (ex. durées LED,
   définition précise de "2 tentatives au total"), corriger ce document avant de coder.
-- Le point 1.1 (inversion de l'ordre des facteurs) est un changement de contrat d'API qui
-  touche 3 services + le firmware + les tests E2E : c'est le point le plus risqué en termes de
-  régression, à traiter avec le plus de marge avant jeudi.
+- Le point 1.1 (inversion de l'ordre des facteurs) est fait et testé unitairement (60 tests
+  passent), mais **pas encore vérifié avec une vraie photo de visage / face-api** (le smoke
+  test WAF n'a exercé que `/auth/login/identify`, sans aller jusqu'au bout avec un client
+  enrôlé réel) — à couvrir dans la recette hotspot (Phase 2), pas avant.
 - Le point 1.4 (écran back-office) n'a pas de brique existante à adapter — c'est le plus gros
   effort de développement neuf du lot.
 - `graphify-out` non localisé : si ce dossier doit vraiment être exclu de l'archive, il faut

@@ -14,9 +14,11 @@ from .config import settings
 
 _bearer = HTTPBearer(auto_error=True)
 
-# Claim `typ` des jetons "en attente de second facteur" (voir security.py du
-# service auth : le jeton complet, lui, ne porte pas ce claim).
+# Claim `typ` des jetons "en attente d'une étape suivante" (le jeton d'accès
+# complet, lui, ne porte aucun claim `typ`). Parcours client (§10.1) :
+# identifiant -> face_pending -> visage -> password_pending -> mot de passe.
 _FACE_PENDING_TYP = "face_pending"
+_PASSWORD_PENDING_TYP = "password_pending"
 
 
 class Principal(BaseModel):
@@ -43,10 +45,10 @@ def current_principal(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> Principal:
     payload = _decode(creds.credentials)
-    if payload.get("typ") == _FACE_PENDING_TYP:
-        # Jeton intermédiaire (mot de passe validé, visage pas encore vérifié) :
-        # ne doit donner accès à AUCUNE route métier.
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "face verification required")
+    if payload.get("typ"):
+        # Jeton intermédiaire (identification ou visage en cours, pas encore
+        # un login complet) : ne doit donner accès à AUCUNE route métier.
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "login not complete")
     return Principal(username=payload["sub"], role=payload.get("role", "customer"))
 
 
@@ -61,13 +63,56 @@ def current_customer(principal: Principal = Depends(current_principal)) -> Princ
 def current_pending_face(
     creds: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> Principal:
-    """Second facteur (POST /auth/login/face) : exige explicitement un jeton
-    `face_pending` émis par le service auth après vérification du mot de
-    passe. Un jeton d'accès normal est refusé (symétrique à current_principal)."""
+    """Étape visage (POST /auth/login/face) : exige explicitement un jeton
+    `face_pending` émis après l'identification (identifiant seul). Un jeton
+    d'accès normal est refusé (symétrique à current_principal)."""
     payload = _decode(creds.credentials)
     if payload.get("typ") != _FACE_PENDING_TYP:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
     return Principal(username=payload["sub"], role=payload.get("role", "customer"))
+
+
+def current_pending_password(
+    creds: HTTPAuthorizationCredentials = Depends(_bearer),
+) -> Principal:
+    """Dernière étape (POST /auth/login/password) : exige un jeton
+    `password_pending` émis après un visage reconnu — le mot de passe n'est
+    jamais vérifié avant l'identifiant et le visage (ordre imposé, §10.1)."""
+    payload = _decode(creds.credentials)
+    if payload.get("typ") != _PASSWORD_PENDING_TYP:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid token")
+    return Principal(username=payload["sub"], role=payload.get("role", "customer"))
+
+
+def create_pending_face_token(*, subject: str, role: str) -> str:
+    """Jeton intermédiaire émis après l'identifiant seul (étape 1) : ne donne
+    accès à AUCUNE route métier, seulement à POST /auth/login/face. Durée de
+    vie courte pour limiter la fenêtre de rejeu."""
+    now = datetime.now(UTC)
+    payload = {
+        "sub": subject,
+        "role": role,
+        "typ": _FACE_PENDING_TYP,
+        "iat": now,
+        "exp": now + timedelta(seconds=settings.face_pending_expire_seconds),
+        "iss": "resilience-alpha-auth",
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def create_pending_password_token(*, subject: str, role: str) -> str:
+    """Jeton intermédiaire émis après un visage reconnu (étape 3) : ne donne
+    accès qu'à POST /auth/login/password, dernière étape du parcours."""
+    now = datetime.now(UTC)
+    payload = {
+        "sub": subject,
+        "role": role,
+        "typ": _PASSWORD_PENDING_TYP,
+        "iat": now,
+        "exp": now + timedelta(seconds=settings.face_pending_expire_seconds),
+        "iss": "resilience-alpha-auth",
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 def create_access_token(*, subject: str, role: str) -> str:

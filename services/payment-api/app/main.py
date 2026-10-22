@@ -1,7 +1,9 @@
 """API métier de paiement (fictif).
 
-Endpoints publics (via WAF) : /health, /auth/register, /auth/login/face,
-/accounts/me, /transactions, /face/enrollment et
+Endpoints publics (via WAF) : /health, /auth/register, /auth/login/identify,
+/auth/login/face, /auth/login/password (parcours client dans cet ordre,
+§10.1 : identifiant -> visage -> mot de passe), /accounts/me, /transactions,
+/face/enrollment et
 /transactions/{id}/confirm|cancel (validation faciale), /ws/face-events
 (relais temps réel vers l'indicateur LED ESP8266, voir firmware/face-led/).
 Endpoint interne (non exposé au réseau pédagogique) : /internal/canary,
@@ -32,7 +34,15 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from . import accounts, biometrics, db, events, face, service
-from .auth import Principal, create_access_token, current_customer, current_pending_face
+from .auth import (
+    Principal,
+    create_access_token,
+    create_pending_face_token,
+    create_pending_password_token,
+    current_customer,
+    current_pending_face,
+    current_pending_password,
+)
 from .config import settings
 from .metrics import FACE_LATENCY, FACE_VERIFICATIONS, PAYMENT_TX, MetricsMiddleware
 
@@ -69,6 +79,14 @@ class TransferRequest(BaseModel):
 class FaceImage(BaseModel):
     # Photo JPEG/PNG en base64 brut (data URL acceptée). Taille fine contrôlée par face.py.
     image: str = Field(min_length=16, max_length=face.MAX_IMAGE_B64_CHARS * 2)
+
+
+class IdentifyRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+
+
+class PasswordStep(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
 
 
 class PoseImages(BaseModel):
@@ -206,18 +224,31 @@ def register(req: RegisterRequest) -> dict:
     return {"access_token": token, "token_type": "bearer", "role": "customer"}
 
 
+@app.post("/auth/login/identify")
+def login_identify(req: IdentifyRequest) -> dict:
+    """Étape 1 du parcours client (§10.1 : identifiant -> caméra -> visage ->
+    mot de passe). Jeton `face_pending` toujours émis, que l'identifiant
+    existe ou non : pas d'oracle d'existence ici, un identifiant invalide ou
+    un client sans visage enrôlé échouera simplement à l'étape suivante
+    (403 face_not_enrolled / face_mismatch)."""
+    token = create_pending_face_token(subject=req.username, role="customer")
+    return {"status": "face_required", "pending_token": token}
+
+
 @app.post("/auth/login/face")
 def login_face(req: FaceImage, principal: Principal = Depends(current_pending_face)) -> dict:
-    """Second facteur de connexion : le mot de passe a déjà été vérifié par
-    le service auth, qui a émis un jeton `face_pending` de courte durée.
-    Même logique anti-force-brute / anti-spoof que la confirmation de
-    virement, compteur d'échecs indépendant (purpose='login')."""
+    """Étape 2 : second facteur visage, à partir du jeton `face_pending` émis
+    par /auth/login/identify. Sur reconnaissance, émet un jeton
+    `password_pending` : le mot de passe (étape 3) reste à vérifier, il
+    n'ouvre jamais la session à lui seul. Verrou anti-force-brute dédié au
+    login (purpose='login', compteur partagé avec l'étape mot de passe) :
+    2 tentatives au total, pas 2 par facteur (§10.1)."""
     user = principal.username
-    if biometrics.recent_failures(user, settings.face_lockout_minutes, purpose="login") >= (
-        settings.face_lockout_failures
+    if biometrics.recent_failures(user, settings.login_lockout_minutes, purpose="login") >= (
+        settings.login_lockout_failures
     ):
-        log.warning("face login lockout user=%s", user)
-        raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "face_locked")
+        log.warning("login lockout user=%s", user)
+        raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "login_locked")
 
     enrollment = biometrics.get_enrollment(user)
     if enrollment is None:
@@ -242,17 +273,53 @@ def login_face(req: FaceImage, principal: Principal = Depends(current_pending_fa
         result,
         f"{distance:.4f}" if distance is not None else "-",
     )
-    events.publish({"ok": result == "match", "purpose": "login"})
 
     if result != "match":
+        # Échec définitif de cette étape (pas seulement "en attente du mot de
+        # passe") : la LED/l'indicateur doit refléter l'échec maintenant.
+        events.publish({"ok": False, "purpose": "login"})
         FACE_VERIFICATIONS.labels(purpose="login", result=result).inc()
-        left = settings.face_lockout_failures - biometrics.recent_failures(
-            user, settings.face_lockout_minutes, purpose="login"
+        left = settings.login_lockout_failures - biometrics.recent_failures(
+            user, settings.login_lockout_minutes, purpose="login"
         )
         code = "spoof" if result == "spoof" else "face_mismatch"
         raise _face_error(status.HTTP_403_FORBIDDEN, code, attempts_left=max(0, left))
 
+    # Visage reconnu, mais le login n'est pas encore complet (mot de passe à
+    # venir) : pas d'événement "ok" ici, ce serait prématuré.
     FACE_VERIFICATIONS.labels(purpose="login", result="match").inc()
+    token = create_pending_password_token(subject=user, role=principal.role)
+    return {"status": "password_required", "pending_token": token}
+
+
+@app.post("/auth/login/password")
+def login_password(req: PasswordStep, principal: Principal = Depends(current_pending_password)) -> dict:
+    """Étape 3, finale : mot de passe, vérifié seulement après l'identifiant
+    et le visage (ordre imposé, §10.1). C'est ici, pas avant, que le login
+    est vraiment complet -> c'est ici que l'indicateur LED doit réagir.
+    Même verrou anti-force-brute que l'étape visage, compteur partagé
+    (purpose='login') : 2 tentatives au total pour tout le parcours, pas 2
+    par facteur."""
+    user = principal.username
+    if biometrics.recent_failures(user, settings.login_lockout_minutes, purpose="login") >= (
+        settings.login_lockout_failures
+    ):
+        log.warning("login lockout user=%s", user)
+        raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "login_locked")
+
+    row = db.verify_login_password(user, req.password)
+    if row is None or not row["ok"]:
+        biometrics.log_attempt(user, purpose="login", result="password_mismatch", distance=None)
+        events.publish({"ok": False, "purpose": "login"})
+        left = settings.login_lockout_failures - biometrics.recent_failures(
+            user, settings.login_lockout_minutes, purpose="login"
+        )
+        raise _face_error(status.HTTP_401_UNAUTHORIZED, "invalid_credentials", attempts_left=max(0, left))
+    if row["locked"]:
+        events.publish({"ok": False, "purpose": "login"})
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "account locked")
+
+    events.publish({"ok": True, "purpose": "login"})
     token = create_access_token(subject=user, role=principal.role)
     return {"access_token": token, "token_type": "bearer", "role": principal.role}
 

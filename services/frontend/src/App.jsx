@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getAccounts, getFaceEnrollment, getTransactions, login, loginFace, register } from "./api.js";
+import {
+  getAccounts,
+  getFaceEnrollment,
+  getTransactions,
+  identify,
+  loginFace,
+  loginPassword,
+  register,
+} from "./api.js";
 import AccountCard from "./components/AccountCard.jsx";
 import ConsentModal from "./components/ConsentModal.jsx";
 import FaceCapture from "./components/FaceCapture.jsx";
@@ -9,10 +17,17 @@ import History from "./components/History.jsx";
 import PoseCapture, { POSES } from "./components/PoseCapture.jsx";
 import TransferForm from "./components/TransferForm.jsx";
 import { StatusBanner, StatusPill, useServiceStatus } from "./components/ServiceStatus.jsx";
-import Supervision, { saveSupervisionToken } from "./Supervision.jsx";
+import Supervision from "./Supervision.jsx";
 
 // Erreurs révélatrices d'un incident (réseau, rate-limit, indisponibilité).
 const INCIDENT_STATUSES = new Set([0, 429, 502, 503, 504]);
+
+// Échec de prise de vue (pas de visage détecté, plusieurs visages, image
+// illisible) : aucune tentative de reconnaissance n'est comptée côté API
+// (voir payment-api login_face). Toute autre erreur de l'étape visage
+// (face_mismatch, spoof, face_locked...) déclenche le retour à l'étape 1,
+// §10.1.
+const RETAKE_PHOTO_CODES = new Set(["no_face", "multiple_faces", "invalid_image", "image_too_large"]);
 
 export default function App() {
   return window.location.pathname === "/supervision" ? <Supervision /> : <ClientApp />;
@@ -88,26 +103,19 @@ function Login({ onLogin, onGoToRegister }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  // null = étape mot de passe ; sinon second facteur (jeton intermédiaire).
-  const [face, setFace] = useState(null);
+  // Parcours imposé (§10.1) : identifiant -> caméra/visage -> mot de passe.
+  // "identify" : identifiant seul. "face" : jeton face_pending (token émis
+  // par /auth/login/identify). "password" : jeton password_pending (émis
+  // par /auth/login/face une fois le visage reconnu).
+  const [step, setStep] = useState({ name: "identify" });
 
-  const submitPassword = async (e) => {
+  const submitIdentify = async (e) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const res = await login(username.trim(), password);
-      if (res.pending_token) {
-        setFace({ token: res.pending_token, attempt: 0 });
-        return;
-      }
-      if (res.role !== "customer") {
-        // operator / admin : pas de comptes bancaires, leur espace est la supervision.
-        saveSupervisionToken(res.access_token);
-        window.location.assign("/supervision");
-        return;
-      }
-      onLogin({ token: res.access_token, username: username.trim() });
+      const res = await identify(username.trim());
+      setStep({ name: "face", token: res.pending_token, attempt: 0 });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -119,32 +127,90 @@ function Login({ onLogin, onGoToRegister }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await loginFace(face.token, image);
-      onLogin({ token: res.access_token, username: username.trim() });
+      const res = await loginFace(step.token, image);
+      setPassword("");
+      setStep({ name: "password", token: res.pending_token });
     } catch (err) {
       setError(err.message);
-      setFace((f) => ({ ...f, attempt: f.attempt + 1 }));
+      if (RETAKE_PHOTO_CODES.has(err.code)) {
+        // Souci de prise de vue (pas de visage, plusieurs visages, image
+        // illisible) : aucune tentative de reconnaissance n'a eu lieu, on
+        // laisse reprendre la photo sans tout recommencer.
+        setStep((s) => ({ ...s, attempt: s.attempt + 1 }));
+      } else {
+        // Visage non reconnu (ou blocage) : identifiant remis à vide et
+        // caméra coupée (FaceCapture démonté), retour à l'étape 1 (§10.1).
+        setUsername("");
+        setStep({ name: "identify" });
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  if (face) {
+  const submitPassword = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await loginPassword(step.token, password);
+      onLogin({ token: res.access_token, username: username.trim() });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (step.name === "face") {
     return (
       <AuthShell
-        title="Confirmez avec votre visage"
-        subtitle="Dernière étape : une photo de votre visage pour finaliser la connexion."
+        title="Vérification du visage"
+        subtitle="Placez votre visage bien en face, dans la lumière."
       >
         <FaceCapture
-          key={face.attempt}
+          key={step.attempt}
           busy={busy}
-          submitLabel="Se connecter"
+          submitLabel="Vérifier"
           onSubmit={submitFace}
-          onCancel={() => setFace(null)}
+          onCancel={() => setStep({ name: "identify" })}
         />
         <div aria-live="polite">
           {error && <p className="mt-4 rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
         </div>
+      </AuthShell>
+    );
+  }
+
+  if (step.name === "password") {
+    return (
+      <AuthShell title="Dernière étape" subtitle="Entrez votre mot de passe pour finaliser la connexion.">
+        <form onSubmit={submitPassword} className="space-y-5">
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium">
+              Mot de passe
+            </label>
+            <input
+              id="password"
+              type="password"
+              className="field"
+              autoComplete="current-password"
+              autoFocus
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+          <button
+            disabled={busy}
+            className="w-full rounded-xl bg-petrol px-4 py-3 font-semibold text-white hover:bg-petrol-deep disabled:opacity-50"
+          >
+            {busy ? "Connexion…" : "Se connecter"}
+          </button>
+          <div aria-live="polite">
+            {error && <p className="rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}
+          </div>
+        </form>
       </AuthShell>
     );
   }
@@ -161,7 +227,7 @@ function Login({ onLogin, onGoToRegister }) {
         </p>
       }
     >
-      <form onSubmit={submitPassword} className="space-y-5">
+      <form onSubmit={submitIdentify} className="space-y-5">
         <div>
           <label htmlFor="username" className="block text-sm font-medium">
             Identifiant
@@ -175,25 +241,11 @@ function Login({ onLogin, onGoToRegister }) {
             required
           />
         </div>
-        <div>
-          <label htmlFor="password" className="block text-sm font-medium">
-            Mot de passe
-          </label>
-          <input
-            id="password"
-            type="password"
-            className="field"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
         <button
           disabled={busy}
           className="w-full rounded-xl bg-petrol px-4 py-3 font-semibold text-white hover:bg-petrol-deep disabled:opacity-50"
         >
-          {busy ? "Connexion…" : "Se connecter"}
+          {busy ? "Vérification…" : "Continuer"}
         </button>
         <div aria-live="polite">
           {error && <p className="rounded-xl bg-debit/10 px-4 py-3 text-sm text-debit">{error}</p>}

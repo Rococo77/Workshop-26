@@ -104,6 +104,57 @@ def test_pending_face_token_is_accepted_by_current_pending_face():
     assert principal.username == "jordan"
 
 
+# ---------------------------------- parcours client (§10.1) : jeton étape 3
+def test_pending_password_token_is_rejected_by_current_principal():
+    """Même garde-fou que face_pending : aucune route métier normale."""
+    token = _raw_token(typ="password_pending")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_principal(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_normal_token_is_rejected_by_current_pending_password():
+    token = auth.create_access_token(subject="jordan", role="customer")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_pending_password(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_pending_face_token_is_rejected_by_current_pending_password():
+    """Un jeton d'étape 1 ne doit pas ouvrir l'étape 3 : les 3 étapes sont
+    strictement ordonnées (identifiant -> visage -> mot de passe)."""
+    token = _raw_token(typ="face_pending")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_pending_password(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_pending_password_token_is_rejected_by_current_pending_face():
+    """Symétrique : un jeton d'étape 3 ne doit pas rouvrir l'étape 2."""
+    token = _raw_token(typ="password_pending")
+    with pytest.raises(fastapi.HTTPException) as exc:
+        auth.current_pending_face(_creds(token))
+    assert exc.value.status_code == 401
+
+
+def test_pending_password_token_is_accepted_by_current_pending_password():
+    token = _raw_token(typ="password_pending")
+    principal = auth.current_pending_password(_creds(token))
+    assert principal.username == "jordan"
+
+
+def test_create_pending_face_token_has_face_pending_typ():
+    token = auth.create_pending_face_token(subject="jordan", role="customer")
+    principal = auth.current_pending_face(_creds(token))
+    assert principal.username == "jordan"
+
+
+def test_create_pending_password_token_has_password_pending_typ():
+    token = auth.create_pending_password_token(subject="jordan", role="customer")
+    principal = auth.current_pending_password(_creds(token))
+    assert principal.username == "jordan"
+
+
 # --------------------------------------------- biometrics.py (purpose filter)
 class _FakeConn:
     """Capture la requête exécutée sans toucher une vraie base."""
@@ -121,6 +172,23 @@ class _FakeConn:
         return self._row
 
 
+def test_verify_login_password_queries_by_username_and_candidate_password(monkeypatch):
+    """Étape 3 (§10.1) : la comparaison est faite par pgcrypto (`crypt(...)`
+    dans le SQL), jamais en comparant un hash en clair côté Python."""
+    fake = _FakeConn({"ok": True, "locked": False})
+
+    @contextlib.contextmanager
+    def fake_get_conn():
+        yield fake
+
+    monkeypatch.setattr(db, "get_conn", fake_get_conn)
+
+    row = db.verify_login_password("jordan", "s3cret!!!!")
+    assert row == {"ok": True, "locked": False}
+    assert fake.params == ("s3cret!!!!", "jordan")
+    assert "crypt(" in fake.sql
+
+
 def test_recent_failures_filters_by_purpose(monkeypatch):
     fake = _FakeConn({"n": 3})
 
@@ -135,6 +203,33 @@ def test_recent_failures_filters_by_purpose(monkeypatch):
 
     biometrics.recent_failures("jordan", 15)  # défaut inchangé : 'confirm'
     assert fake.params == ("jordan", "confirm", 15)
+
+
+def test_recent_failures_counts_password_mismatch_alongside_face_failures(monkeypatch):
+    """§10.1 : 2 tentatives AU TOTAL pour le login (visage + mot de passe
+    confondus) -> un échec de mot de passe doit compter dans le même
+    compteur qu'un visage non reconnu, pas dans un compteur à part."""
+    fake = _FakeConn({"n": 0})
+
+    @contextlib.contextmanager
+    def fake_get_conn():
+        yield fake
+
+    monkeypatch.setattr(biometrics.db, "get_conn", fake_get_conn)
+
+    biometrics.recent_failures("jordan", 5, purpose="login")
+    assert "'password_mismatch'" in fake.sql
+    assert "'mismatch'" in fake.sql
+    assert "'spoof'" in fake.sql
+
+
+def test_login_lockout_defaults_match_10_1():
+    """§10.1 : 2 tentatives au total puis 5 min de blocage (login) — distinct
+    du verrou de confirmation de virement (5 échecs / 15 min, inchangé)."""
+    assert config.settings.login_lockout_failures == 2
+    assert config.settings.login_lockout_minutes == 5
+    assert config.settings.face_lockout_failures == 5
+    assert config.settings.face_lockout_minutes == 15
 
 
 # ------------------------------------------- biometrics.py (pool multi-poses)

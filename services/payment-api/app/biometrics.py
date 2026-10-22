@@ -78,16 +78,18 @@ def log_attempt(
 
 
 def recent_failures(username: str, minutes: int, purpose: str = "confirm") -> int:
-    """Échecs de reconnaissance (visage différent ou spoof) sur la fenêtre,
-    pour un `purpose` donné ('confirm' ou 'login' : compteurs indépendants,
-    un client qui rate sa connexion ne doit pas épuiser ses essais sur une
-    confirmation de virement en cours, et inversement)."""
+    """Échecs sur la fenêtre, pour un `purpose` donné ('confirm' ou 'login' :
+    compteurs indépendants, un client qui rate sa connexion ne doit pas
+    épuiser ses essais sur une confirmation de virement en cours, et
+    inversement). 'password_mismatch' ne peut survenir qu'en purpose='login'
+    (§10.1 : 2 tentatives AU TOTAL pour tout le parcours de connexion,
+    visage et mot de passe confondus — un seul compteur partagé)."""
     with db.get_conn() as conn:
         row = conn.execute(
             "SELECT count(*) AS n FROM face_verification_log l "
             "JOIN app_user u ON u.id = l.user_id "
             "WHERE u.username = %s AND l.purpose = %s "
-            "AND l.result IN ('mismatch', 'spoof') "
+            "AND l.result IN ('mismatch', 'spoof', 'password_mismatch') "
             "AND l.created_at > now() - make_interval(mins => %s)",
             (username, purpose, minutes),
         ).fetchone()
