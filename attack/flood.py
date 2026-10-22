@@ -3,12 +3,15 @@
 
 Trois scénarios, tous limités au SI fictif de l'équipe (sujet §3.4 / §9) :
 
-  business (défaut) : mélange POST /auth/login (vérif mot de passe -> base) et
-                      POST /api/transactions -> sature le CHEMIN MÉTIER du
-                      paiement (↑ req/s, ↑ p95, ↑ auth_login_failures_total).
-                      Déclenche la détection `dos_flood` et le MODE DÉGRADÉ
-                      (virements mis en file puis rejoués). Plus crédible qu'un
-                      flood sur /api/health, qui ne touche ni l'auth ni la base.
+  business (défaut) : mélange POST /auth/login (vérif mot de passe -> base, d'où
+                      ↑ auth_login_failures_total) et POST /api/transactions
+                      (rejeté en 401 faute de jeton : charge le WAF + l'API, pas
+                      la base). Sature le CHEMIN MÉTIER du paiement (↑ req/s,
+                      ↑ p95, ↑ 429) -> détection `dos_flood`. Le MODE DÉGRADÉ qui
+                      s'ensuit (virements LÉGITIMES mis en file puis rejoués) se
+                      démontre avec une vraie transaction cliente PENDANT
+                      l'attaque, pas via ce flood. Plus crédible qu'un flood sur
+                      /api/health, qui ne touche ni l'auth ni la base.
 
   face              : POST /api/auth/login/face -> éprouve la zone WAF stricte de
                       la biométrie (2 r/s). On doit voir SURTOUT des 429 : preuve
@@ -42,8 +45,9 @@ _lock = threading.Lock()
 # Base64 brut d'un PNG minimal (PAS de préfixe `data:` ni `;base64,` : ceux-ci
 # sont flaggés par le CRS -> 403, ce qui masquerait la limite de débit). Ainsi la
 # requête PASSE le CRS, atteint la zone WAF `face` et s'y fait limiter (429),
-# ce qui est précisément ce qu'on veut prouver. L'API la rejetterait (pas un
-# visage), mais la plupart des requêtes n'y arrivent jamais (429 au WAF).
+# ce qui est précisément ce qu'on veut prouver. Les rares requêtes qui passent la
+# limite sont rejetées par l'API en 401/403 (pas de jeton `face_pending`), avant
+# tout calcul biométrique -> la plupart n'atteignent jamais l'API (429 au WAF).
 _FAKE_IMG = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )

@@ -14,8 +14,8 @@ Prérequis : Python 3 (bibliothèque standard uniquement, aucune dépendance).
 
 | Script | Attaque | Effet attendu | Réponse automatique |
 |--------|---------|---------------|---------------------|
-| `flood.py --scenario business` (défaut) | DoS sur le **chemin métier** (`/auth/login` + `/api/transactions`) | ↑ req/s, ↑ p95, ↑ `auth_login_failures_total`, 429 | Détection `dos_flood` → blocage IP + **mode dégradé** (virements en file puis rejoués) |
-| `flood.py --scenario face` | Force brute sur la **biométrie** (`/api/auth/login/face`) | **Surtout des 429** (zone WAF stricte 2 r/s) | Limite WAF tient, auto-inscription/biométrie résiste |
+| `flood.py --scenario business` (défaut) | DoS sur le **chemin métier** (`/auth/login` hit base + `/api/transactions` rejeté 401) | ↑ req/s, ↑ p95, ↑ `auth_login_failures_total`, 429 | Détection `dos_flood` → blocage IP + **mode dégradé** : les virements **légitimes** (vraie transaction cliente) sont mis en file puis rejoués |
+| `flood.py --scenario face` | Force brute sur la **biométrie** (`/api/auth/login/face`) | **Surtout des 429** (zone WAF 2 r/s) ; les rares passées en 401/403 (pas de jeton `face_pending`) | Limite WAF tient, auth faciale résiste |
 | `flood.py --scenario health` | Flood léger (`/api/health`) | ↑ req/s (ne touche pas le métier) | Comparaison / sanity-check |
 | `sqli.py` | Injection SQL sur l'auth | 403 (CRS), aucune injection réussie | Détection `injection_attempt` → confinement IP |
 | `exfil.py` | Accès interne / exfiltration | 404 / 401 / limit borné | Exposition maîtrisée, trace pour investigation |
