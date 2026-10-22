@@ -9,6 +9,9 @@ REMEDIATION_API_TOKEN: str = os.getenv("REMEDIATION_API_TOKEN", "dev-token")
 WAF_CONTAINER: str = os.getenv("WAF_CONTAINER", "ra-waf")
 WAF_DYNAMIC_DIR: str = os.getenv("WAF_DYNAMIC_DIR", "/waf-dynamic")
 CANARY_TARGET: str = os.getenv("CANARY_TARGET", "http://payment-api:8000")
+# Mode dégradé pendant un DoS : virements validés mis en file, rejoués à la
+# clôture de l'incident. false = règlement immédiat, comme avant.
+DEGRADED_MODE: bool = os.getenv("DEGRADED_MODE", "true").lower() == "true"
 
 # Garde-fou : plages JAMAIS bloquées. 172.16.0.0/12 couvre les réseaux bridge
 # Docker : derrière un port publié (Docker Desktop, CI), tout client apparaît
@@ -28,5 +31,8 @@ RESTARTABLE_CONTAINERS: frozenset[str] = frozenset({"ra-payment-api", "ra-auth",
 # Playbooks connus. Un type d'incident inconnu est journalisé mais n'entraîne
 # aucune action privilégiée (principe de moindre surprise / moindre privilège).
 KNOWN_PLAYBOOKS: frozenset[str] = frozenset(
-    {"dos_flood", "service_unavailable", "injection_attempt"}
+    {"dos_flood", "service_unavailable", "injection_attempt", "honeytoken_triggered"}
 )
+
+# Services qui portent les pièges honeytokens (journal "HONEYTOKEN ... ip=").
+HONEYTOKEN_CONTAINERS: tuple[str, ...] = ("ra-auth", "ra-payment-api")

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -21,7 +22,9 @@ from decimal import Decimal, InvalidOperation
 from fastapi import (
     Depends,
     FastAPI,
+    Header,
     HTTPException,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
@@ -31,7 +34,7 @@ from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
-from . import accounts, biometrics, db, events, face, service
+from . import accounts, biometrics, db, events, face, honeytokens, service
 from .auth import Principal, create_access_token, current_customer, current_pending_face
 from .config import settings
 from .metrics import FACE_LATENCY, FACE_VERIFICATIONS, PAYMENT_TX, MetricsMiddleware
@@ -40,8 +43,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("payment-api")
 
 
+def _replay_leftovers() -> None:
+    """Au démarrage, hors mode dégradé : règle les virements restés en file
+    (moteur ou API redémarrés avant la clôture de l'incident)."""
+    try:
+        if not service.degraded(settings.degraded_max_minutes):
+            done = service.replay_queue()
+            if done["settled"] or done["rejected"]:
+                log.info("file d'attente rejouée au démarrage: %s", done)
+    except Exception as exc:
+        log.warning("rejeu au démarrage impossible: %s", exc)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    await asyncio.to_thread(_replay_leftovers)
     task = asyncio.create_task(events.broadcast_loop())
     try:
         yield
@@ -51,6 +67,8 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="Resilience-Alpha Payment API", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(MetricsMiddleware)
+# Ajouté en dernier = exécuté en premier : voit toutes les réponses, même les 500.
+app.add_middleware(honeytokens.ExfiltrationGuard)
 
 # Comptes canari : utilisateurs verrouillés _canary_src / _canary_dst (seed ou
 # migration 06), jamais connectés ; voir service.canary_route().
@@ -274,7 +292,10 @@ def my_accounts(principal: Principal = Depends(current_customer)) -> list[dict]:
 
 @app.post("/transactions", status_code=status.HTTP_201_CREATED)
 def create_transaction(
-    req: TransferRequest, response: Response, principal: Principal = Depends(current_customer)
+    req: TransferRequest,
+    request: Request,
+    response: Response,
+    principal: Principal = Depends(current_customer),
 ) -> dict:
     """Validation faciale active : crée un virement `pending` (202), réglé
     seulement par /transactions/{id}/confirm. Sinon : règlement immédiat (201)."""
@@ -287,11 +308,40 @@ def create_transaction(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "provide either dst_account or dst_iban"
         )
 
-    if settings.face_confirmation_required:
-        return _create_pending(req, amount, principal, response)
-
     try:
         dst_account = req.dst_account or service.account_id_by_iban(req.dst_iban)
+        if honeytokens.is_honey_account(dst_account):
+            # Bénéficiaire = compte leurre : son IBAN ne se trouve que dans la base.
+            honeytokens.trigger(
+                "transfer", request.headers.get("x-real-ip"), f"user={principal.username}"
+            )
+            raise service.BusinessError("destination account not found")
+    except service.BusinessError as exc:
+        PAYMENT_TX.labels(result="rejected").inc()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except Exception as exc:
+        PAYMENT_TX.labels(result="error").inc()
+        log.error("destination lookup failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "transfer backend unavailable"
+        ) from exc
+
+    if settings.face_confirmation_required:
+        return _create_pending(req, dst_account, amount, principal, response)
+
+    try:
+        if service.degraded(settings.degraded_max_minutes):
+            pending = service.create_pending(
+                username=principal.username,
+                src_account=req.src_account,
+                dst_account=dst_account,
+                amount=amount,
+                ttl_seconds=60,
+            )
+            tx = service.queue_pending(pending["id"], principal.username)
+            PAYMENT_TX.labels(result="queued").inc()
+            response.status_code = status.HTTP_202_ACCEPTED
+            return {**tx, "amount": str(tx["amount"])}
         tx = service.transfer(
             username=principal.username,
             src_account=req.src_account,
@@ -317,12 +367,15 @@ def create_transaction(
 
 
 def _create_pending(
-    req: TransferRequest, amount: Decimal, principal: Principal, response: Response
+    req: TransferRequest,
+    dst_account: int,
+    amount: Decimal,
+    principal: Principal,
+    response: Response,
 ) -> dict:
     try:
         if biometrics.get_enrollment(principal.username) is None:
             raise _face_error(status.HTTP_403_FORBIDDEN, "face_not_enrolled")
-        dst_account = req.dst_account or service.account_id_by_iban(req.dst_iban)
         tx = service.create_pending(
             username=principal.username,
             src_account=req.src_account,
@@ -414,6 +467,12 @@ def confirm_transaction(
 
     FACE_VERIFICATIONS.labels(purpose="confirm", result="match").inc()
     try:
+        if service.degraded(settings.degraded_max_minutes):
+            # Remédiation en cours : identité validée, règlement différé au rejeu.
+            queued = service.queue_pending(tx_id, user)
+            PAYMENT_TX.labels(result="queued").inc()
+            log.info("virement mis en file (mode dégradé) user=%s tx=%s", user, tx_id)
+            return {**queued, "amount": str(queued["amount"])}
         settled = service.settle_pending(tx_id, user)
     except service.BusinessError as exc:
         PAYMENT_TX.labels(result="rejected").inc()
@@ -517,6 +576,38 @@ def list_transactions(
     except Exception as exc:
         log.error("tx list failed: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
+
+
+class DegradedRequest(BaseModel):
+    enabled: bool
+
+
+def _require_remediation(token: str | None) -> None:
+    """Endpoints internes de pilotage : jeton du moteur de remédiation exigé
+    (en plus du 404 du WAF sur /api/internal/)."""
+    expected = settings.remediation_api_token
+    if not expected or not secrets.compare_digest(token or "", expected):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid remediation token")
+
+
+@app.post("/internal/degraded")
+def internal_degraded(
+    req: DegradedRequest, x_remediation_token: str | None = Header(default=None)
+) -> dict:
+    _require_remediation(x_remediation_token)
+    service.set_degraded(req.enabled)
+    log.warning("mode dégradé %s", "ACTIVÉ" if req.enabled else "levé")
+    return {"degraded": req.enabled}
+
+
+@app.post("/internal/replay")
+def internal_replay(x_remediation_token: str | None = Header(default=None)) -> dict:
+    _require_remediation(x_remediation_token)
+    done = service.replay_queue()
+    PAYMENT_TX.labels(result="settled").inc(done["settled"])
+    PAYMENT_TX.labels(result="rejected").inc(done["rejected"])
+    log.info("file d'attente rejouée: %s", done)
+    return done
 
 
 @app.post("/internal/canary")

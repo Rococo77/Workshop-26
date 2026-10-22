@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import httpx
 import jwt
@@ -22,6 +23,9 @@ PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 DETECTOR_URL = os.getenv("DETECTOR_URL", "http://ml-detector:9100")
 REMEDIATION_URL = os.getenv("REMEDIATION_URL", "http://remediation-engine:9000")
 WAF_URL = os.getenv("WAF_URL", "http://waf:8080")
+# Assistant RAG (profil `ai`) : rédige le résumé direction d'un rapport.
+RAG_URL = os.getenv("RAG_URL", "http://rag-assistant:8200")
+REPORT_ID = re.compile(r"INC-[0-9]{8}-[0-9]{6}-[a-z_]+")
 JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
@@ -122,3 +126,42 @@ def overview(_: str = Depends(require_supervisor)) -> dict:
         "alerts": alerts,
         "remediation": remediation,
     }
+
+
+@app.get("/reports")
+def reports(_: str = Depends(require_supervisor)) -> list[dict]:
+    """Rapports d'incident générés par le moteur (notification initiale DORA)."""
+    with httpx.Client(timeout=5) as client:
+        return _get_json(client, f"{REMEDIATION_URL}/reports", [])
+
+
+def _report_id(report_id: str) -> str:
+    if not REPORT_ID.fullmatch(report_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "report not found")
+    return report_id
+
+
+@app.get("/reports/{report_id}")
+def report_detail(report_id: str, _: str = Depends(require_supervisor)) -> dict:
+    try:
+        r = httpx.get(f"{REMEDIATION_URL}/reports/{_report_id(report_id)}", timeout=5)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "remediation unavailable") from exc
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, "report not found")
+    return r.json()
+
+
+@app.post("/reports/{report_id}/summary")
+def report_summary(report_id: str, _: str = Depends(require_supervisor)) -> dict:
+    """Résumé direction rédigé par l'assistant LLM (profil `ai`). Le LLM lit
+    le rapport en GET, il n'a aucun droit d'action. Sans Ollama : 503 propre."""
+    try:
+        r = httpx.post(
+            f"{RAG_URL}/incident-summary", json={"report_id": _report_id(report_id)}, timeout=120
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "assistant unavailable") from exc
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, "assistant unavailable")
+    return r.json()

@@ -130,3 +130,10 @@ export const getStatus = () => request("/supervision/status");
 
 // Réservé aux rôles operator et admin (vue détaillée de la supervision).
 export const getOverview = (token) => request("/supervision/overview", { token });
+
+// Rapport d'incident (notification initiale DORA) généré par le moteur.
+export const getReport = (token, id) => request(`/supervision/reports/${id}`, { token });
+
+// Résumé direction rédigé par l'assistant LLM (lecture seule du rapport).
+export const summarizeReport = (token, id) =>
+  request(`/supervision/reports/${id}/summary`, { token, method: "POST" });

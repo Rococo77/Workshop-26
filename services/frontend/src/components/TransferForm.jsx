@@ -173,7 +173,15 @@ export default function TransferForm({ token, account, recentIbans, onSent, onFa
       </form>
 
       <div aria-live="polite">
-        {receipt && (
+        {receipt && receipt.status === "queued" && (
+          <p className="mt-4 rounded-xl bg-warn/10 px-4 py-3 text-sm text-warn">
+            Virement de {formatEur(receipt.amount)} validé et mis en file d&apos;attente : un incident
+            est en cours de traitement. Il sera exécuté automatiquement dès le retour à la normale.
+            <br />
+            Référence <span className="tabular">{receipt.reference}</span>
+          </p>
+        )}
+        {receipt && receipt.status !== "queued" && (
           <p className="mt-4 rounded-xl bg-credit/10 px-4 py-3 text-sm text-credit">
             Virement de {formatEur(receipt.amount)} envoyé à{" "}
             <span className="tabular">{receipt.iban}</span>.

@@ -17,6 +17,7 @@ Prérequis : Python 3 (bibliothèque standard uniquement, aucune dépendance).
 | `flood.py` | Déni de service applicatif (flood HTTP) | ↑ req/s, ↑ latence p95, 429 | Détection `dos_flood` → blocage IP au WAF + canari |
 | `sqli.py` | Injection SQL sur l'auth | 403 (CRS), aucune injection réussie | Détection `injection_attempt` → confinement IP |
 | `exfil.py` | Accès interne / exfiltration | 404 / 401 / limit borné | Exposition maîtrisée, trace pour investigation |
+| `leak_replay.py` | Réutilisation d'identifiants fuités (contient des comptes leurres) | 401 | Détection `honeytoken_triggered` sans ML → blocage IP, rapport d'incident |
 
 ## Exemples
 
@@ -29,6 +30,9 @@ python3 sqli.py  --target http://192.168.137.1:8080 --rounds 60
 
 # Tentative d'exfiltration / accès non autorisé
 python3 exfil.py --target http://192.168.137.1:8080
+
+# Identifiants issus d'une fuite simulée (déclenche les honeytokens)
+python3 leak_replay.py --target http://192.168.137.1:8080
 ```
 
 ## Déroulé de démonstration recommandé (Clip Chrono / live)

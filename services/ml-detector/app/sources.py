@@ -86,3 +86,20 @@ def classify_attack(client: httpx.Client) -> str:
     if total > 0 and block_403 / total >= 0.4:
         return "injection_attempt"
     return "dos_flood"
+
+
+def honeytoken_kinds(client: httpx.Client) -> list[str]:
+    """Pièges déclenchés dans la dernière minute (connexion, virement ou
+    sortie de données vers un compte leurre). Aucun usage légitime : un seul
+    déclenchement suffit, sans passer par le modèle."""
+    try:
+        r = client.get(
+            f"{config.PROMETHEUS_URL}/api/v1/query",
+            params={"query": "sum by (kind) (increase(honeytoken_triggers_total[1m])) > 0"},
+            timeout=5,
+        )
+        r.raise_for_status()
+        return sorted(item["metric"]["kind"] for item in r.json()["data"]["result"])
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        log.warning("requête honeytokens échouée: %s", exc)
+        return []
