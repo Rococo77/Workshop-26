@@ -33,6 +33,7 @@ _last_sent = 0.0
 # Incident en cours (None = situation normale) et issue de sa dernière remédiation.
 _open_incident: str | None = None
 _last_outcome: str | None = None
+_streak = 0  # points anormaux consécutifs (confirmation avant incident)
 
 
 def _should_send(incident_type: str, in_cooldown: bool) -> bool:
@@ -90,7 +91,7 @@ def _detection_loop() -> None:
 
 
 def _tick(client: httpx.Client) -> None:
-    global _open_incident
+    global _open_incident, _streak
     now = time.monotonic()
     in_cooldown = (now - _last_sent) < config.COOLDOWN_SECONDS
 
@@ -117,8 +118,17 @@ def _tick(client: httpx.Client) -> None:
     ANOMALY_SCORE.set(score)
 
     if not is_anomaly:
+        _streak = 0
         _update_state(features, score, "normal")
         _open_incident = None  # incident clos : le prochain sera traité
+        return
+
+    _streak += 1
+    if _streak < config.CONFIRM_POINTS:
+        _update_state(features, score, "normal")
+        log.info(
+            "point anormal non confirmé (%d/%d) score=%.2f", _streak, config.CONFIRM_POINTS, score
+        )
         return
 
     incident_type = sources.classify_attack(client)

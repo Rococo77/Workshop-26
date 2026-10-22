@@ -16,6 +16,10 @@ ANOMALY_CONTAMINATION: float = float(os.getenv("ANOMALY_CONTAMINATION", "0.05"))
 # pendant qu'il agit et vérifie la reprise.
 COOLDOWN_SECONDS: float = float(os.getenv("COOLDOWN_SECONDS", "45"))
 
+# Points anormaux consécutifs exigés avant d'ouvrir un incident : un faux positif
+# isolé (~4 % des points nominaux en évaluation) ne déclenche aucune action.
+CONFIRM_POINTS: int = int(os.getenv("CONFIRM_POINTS", "2"))
+
 # Ordre des features (doit rester cohérent entre entraînement et inférence).
 FEATURE_NAMES: tuple[str, ...] = (
     "req_rate",  # requêtes/s sur l'API métier
