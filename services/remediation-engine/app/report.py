@@ -63,7 +63,7 @@ def build(event: dict) -> dict:
         "anomaly_score": event.get("anomaly_score"),
         "outcome": event["outcome"],
         "chronology": chronology,
-        "actions": event["steps"],
+        "actions": list(event["steps"]),
     }
 
 

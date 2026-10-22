@@ -237,3 +237,87 @@ def reject_pending(tx_id: int, reason: str) -> None:
             "WHERE id = %s AND status = 'pending'",
             (reason, tx_id),
         )
+
+
+# --------------------------------------------------------------------------
+#  Mode dégradé : file d'attente pendant une remédiation (migration 08)
+# --------------------------------------------------------------------------
+def degraded(max_minutes: int) -> bool:
+    """Mode dégradé actif ? Expire seul au bout de `max_minutes` : si le
+    moteur ne le lève pas (redémarré pendant l'incident), les paiements ne
+    restent pas en file indéfiniment. Base non migrée : mode normal."""
+    try:
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT degraded AND since > now() - make_interval(mins => %s) AS active "
+                "FROM platform_mode WHERE id = 1",
+                (max_minutes,),
+            ).fetchone()
+    except psycopg.errors.UndefinedTable:
+        return False
+    return bool(row and row["active"])
+
+
+def set_degraded(enabled: bool) -> None:
+    with db.get_conn() as conn:
+        conn.execute(
+            "UPDATE platform_mode SET degraded = %s, since = now() WHERE id = 1", (enabled,)
+        )
+
+
+def queue_pending(tx_id: int, username: str) -> dict:
+    """Virement validé (visage OK) mis en file au lieu d'être réglé. Même
+    garde que settle_pending (statut + délai) : une seule transition possible."""
+    with db.get_conn() as conn:
+        tx = conn.execute(
+            "UPDATE payment_tx t SET status = 'queued', queued_at = now() "
+            "FROM account a JOIN app_user u ON u.id = a.owner_id "
+            "WHERE t.id = %s AND t.status = 'pending' AND t.expires_at >= now() "
+            "AND a.id = t.src_account AND u.username = %s "
+            "RETURNING t.id, t.reference, t.status, t.amount",
+            (tx_id, username),
+        ).fetchone()
+    if tx is None:
+        raise BusinessError("transaction not pending")
+    return tx
+
+
+def replay_queue(limit: int = 1000) -> dict:
+    """Règle les virements en file, du plus ancien au plus récent, un par
+    transaction SQL. SKIP LOCKED : deux rejeux simultanés ne règlent jamais
+    deux fois le même virement. Solde devenu insuffisant -> rejeté."""
+    done = {"settled": 0, "rejected": 0}
+    for _ in range(limit):
+        with db.get_conn() as conn:
+            tx = conn.execute(
+                "SELECT t.id, t.src_account, t.dst_account, t.amount, u.username "
+                "FROM payment_tx t JOIN account a ON a.id = t.src_account "
+                "JOIN app_user u ON u.id = a.owner_id "
+                "WHERE t.status = 'queued' ORDER BY t.id LIMIT 1 FOR UPDATE OF t SKIP LOCKED"
+            ).fetchone()
+            if tx is None:
+                break
+            try:
+                _move_funds(
+                    conn,
+                    username=tx["username"],
+                    src_account=tx["src_account"],
+                    dst_account=tx["dst_account"],
+                    amount=Decimal(tx["amount"]),
+                )
+            except BusinessError as exc:
+                reason = "replay_failed"
+                if str(exc) == "insufficient funds":
+                    reason = "insufficient_funds"
+                conn.execute(
+                    "UPDATE payment_tx SET status = 'rejected', reject_reason = %s WHERE id = %s",
+                    (reason, tx["id"]),
+                )
+                done["rejected"] += 1
+                continue
+            conn.execute(
+                "UPDATE payment_tx SET status = 'settled', settled_at = now() WHERE id = %s",
+                (tx["id"],),
+            )
+            done["settled"] += 1
+    return done

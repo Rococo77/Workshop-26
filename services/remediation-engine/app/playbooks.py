@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from . import actions
+from . import actions, config
 
 log = logging.getLogger("remediation.playbooks")
 
@@ -27,6 +27,7 @@ class RemediationResult:
     timeline: list[dict] = field(default_factory=list)
     recovered: bool = False
     contained: bool = False
+    degraded: bool = False  # mode dégradé activé : à lever à la clôture
 
     def step(self, msg: str) -> None:
         log.info("[%s] %s", self.incident_type, msg)
@@ -47,6 +48,9 @@ def _wait_recovery(result: RemediationResult, attempts: int = 6, delay: float = 
 
 def handle_dos_flood(source_ip: str | None, service: str) -> RemediationResult:
     r = RemediationResult("dos_flood")
+    if config.DEGRADED_MODE and actions.set_degraded(True):
+        r.degraded = True
+        r.step("mode dégradé : virements validés mis en file, réglés après la reprise")
     # Si le détecteur n'a pas fourni d'IP, on la résout depuis les logs WAF.
     if not source_ip:
         source_ip = actions.top_attacker_ip()

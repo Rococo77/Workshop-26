@@ -70,3 +70,19 @@ def test_honeytoken_incident_immediat_sans_ml(monkeypatch):
     detector._tick(None)
     assert [p["type"] for p in sent] == ["honeytoken_triggered"]
     assert "login" in sent[0]["detail"]
+
+
+def test_retour_au_normal_clot_l_incident(monkeypatch):
+    """Retour au normal après un incident : clôture envoyée au moteur (levée
+    du mode dégradé, rejeu de la file), une seule fois."""
+    closed = []
+    monkeypatch.setattr(detector, "_service_down", lambda c: False)
+    monkeypatch.setattr(detector.sources, "honeytoken_kinds", lambda c: [])
+    monkeypatch.setattr(detector.sources, "collect_features", lambda c: {})
+    monkeypatch.setattr(detector._model, "score", lambda f: (False, 0.1, {}))
+    monkeypatch.setattr(detector, "_close_incident", lambda c: closed.append(True))
+    monkeypatch.setattr(detector, "_open_incident", "dos_flood")
+
+    detector._tick(None)
+    detector._tick(None)
+    assert closed == [True]

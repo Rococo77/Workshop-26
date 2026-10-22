@@ -124,13 +124,13 @@ Interfaces :
   état, cycle attaque/détection/remédiation, service métier, journaux corrélés
 - Vault : http://127.0.0.1:8201 (local uniquement)
 
-### Mise à niveau d'une base existante (migrations 03 à 06)
+### Mise à niveau d'une base existante (migrations 03 à 08)
 
 Les scripts de `services/payment-api/db/init/` ne sont exécutés par PostgreSQL
 **qu'à la création du volume `pgdata`**. Sur une base créée avant leur ajout,
 les rejouer à la main (tous idempotents) :
 ```bash
-for f in 03_face_verification 04_auth_self_service 05_biometric_pool 06_canary_accounts; do
+for f in 03_face_verification 04_auth_self_service 05_biometric_pool 06_canary_accounts          07_honeytokens 08_degraded_mode; do
   docker exec -i ra-postgres psql -U payuser -d paymentdb < services/payment-api/db/init/$f.sql
 done
 ```
@@ -140,6 +140,8 @@ done
 | `04_auth_self_service.sql` | auto-inscription, jeton intermédiaire `face_pending` |
 | `05_biometric_pool.sql` | pool de 5 empreintes + consentement. **Détruit les enrôlements à l'ancien format** : réenrôlement nécessaire |
 | `06_canary_accounts.sql` | comptes canari dédiés `_canary_src`/`_canary_dst` |
+| `07_honeytokens.sql` | comptes leurres (2 utilisateurs, 1 IBAN) et table `honeytoken` |
+| `08_degraded_mode.sql` | statut `queued` des virements + table `platform_mode` (mode dégradé) |
 
 Symptôme d'une migration manquante : canari en 503 (`column ... does not
 exist` ou `source account not found`) dans `docker logs ra-payment-api`.
@@ -187,7 +189,44 @@ Observer dans le dashboard (http://192.168.137.1:8080) et Grafana :
 
 Aucune intervention humaine entre l'attaque et la reprise.
 
-Autres scénarios : `attack/sqli.py`, `attack/exfil.py` (voir `attack/README.md`).
+Autres scénarios : `attack/sqli.py`, `attack/exfil.py`, `attack/leak_replay.py`
+(voir `attack/README.md`).
+
+### Mode dégradé : zéro paiement perdu pendant le DoS
+
+Dès que le playbook DoS démarre, l'API passe en mode dégradé : un virement
+validé par le visage est mis en file d'attente (statut `queued`) au lieu
+d'être réglé. Quand le détecteur revoit un trafic normal, il clôt l'incident ;
+le moteur lève alors le mode dégradé et règle la file, du plus ancien au plus
+récent (solde vérifié sous verrou, un virement devenu sans provision est rejeté).
+Pour le montrer : pendant l'attaque, valider un virement depuis le front
+(message « mis en file d'attente »), puis constater dans l'historique qu'il
+passe à réglé après la fin de l'attaque. Désactivable : `DEGRADED_MODE=false`
+sur le moteur. Filet : le mode expire seul au bout de 10 min
+(`DEGRADED_MAX_MINUTES`) et la file est rejouée au démarrage de l'API.
+
+### Comptes leurres (honeytokens)
+
+```bash
+python3 attack/leak_replay.py --target http://192.168.137.1:8080
+```
+Le script rejoue un extrait « volé » de la table des utilisateurs, qui contient
+deux comptes leurres (`m.lefevre.dsi`, `tresorerie.groupe`, IBAN
+`FR76-FAKE-7341`). Personne ne les utilise : une connexion, un virement vers
+l'IBAN ou une réponse HTTP qui contient l'une de ces valeurs prouve la fuite.
+Le détecteur ouvre l'incident `honeytoken_triggered` sans passer par le
+modèle, le moteur bloque la source si elle est attribuable et liste les
+actions humaines (origine de la fuite, rotation des secrets, notifications).
+
+### Rapport d'incident automatique
+
+Après chaque incident, le moteur produit un rapport au format d'une
+notification initiale DORA : chronologie depuis le premier point anormal,
+cause, actions, temps de reprise. Supervision, carte de l'incident :
+« Rapport d'incident », téléchargeable en `.md`. Le bouton « Résumé pour la
+direction » demande à l'assistant RAG (profil `ai`) de rédiger un résumé
+depuis ce rapport, en lecture seule (environ 40 s sur CPU). API :
+`GET /reports`, `GET /reports/{id}` sur le moteur.
 
 ## 6. Chaos engineering (répétition jeudi)
 

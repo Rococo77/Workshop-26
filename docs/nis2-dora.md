@@ -24,12 +24,14 @@ priorité, NIS2 en complément).
 | Journalisation / traçabilité | DORA art. 15 | Loki + corrélation SIEM + horodatage des remédiations |
 | Mesures techniques (durcissement, accès) | NIS2 art. 21.2 | WAF/CRS, segmentation réseau, moindre privilège, secrets chiffrés |
 | Analyse de risques | NIS2 art. 21.2.a | EBIOS RM (`docs/ebios-rm.md`) |
+| Contenu de la notification initiale | DORA art. 19 ; règl. délégué (UE) 2025/301 | Rapport généré après chaque incident (chronologie, cause, actions, temps de reprise), résumé direction rédigé par l'assistant local |
+| Détection d'une fuite de données | DORA art. 10 ; NIS2 art. 21.2.b | Comptes leurres : alerte dès la première utilisation |
 
 ## 3. Exigences NON démontrables en 4 jours (honnêteté)
 
 | Exigence | Pourquoi hors scope | Ce qu'il faudrait en production |
 |----------|---------------------|---------------------------------|
-| Notification d'incident sous 24 h/72 h | Processus organisationnel, pas technique | Procédure + canal CSIRT/autorité, registre d'incidents |
+| Envoi de la notification à l'autorité (4 h après classification, 24 h au plus tard) | Classification « majeur » et envoi : décision humaine. Le contenu, lui, est produit automatiquement | Procédure de classification, canal vers l'autorité, registre d'incidents persistant |
 | Gouvernance et responsabilité de l'organe de direction | Dimension RH/juridique | Comité des risques ICT, formation dirigeants |
 | Gestion du risque lié aux tiers ICT | Pas de fournisseur réel | Registre des contrats, clauses de résilience, audit |
 | Tests TLPT (red team avancé, menace réelle) | Nécessite agrément et durée | Campagne TLPT pilotée, scénarios menace-informés |

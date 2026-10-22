@@ -23,6 +23,12 @@
 | Déni de service applicatif | ML `dos_flood` (req/s, latence, 429) | Playbook DoS | Blocage IP WAF (+ restart si saturation) | Transaction canari OK |
 | Service injoignable (crash) | `up == 0` | Playbook `service_unavailable` | Restart conteneur (allowlist) | Transaction canari OK |
 | Tentative d'injection | ML `injection_attempt` (403 CRS) | Playbook injection | Confinement IP + trace | Intégrité service (canari) |
+| Fuite de la base (compte leurre utilisé) | `honeytoken_triggers_total` (sans ML) | Playbook `honeytoken_triggered` | Confinement IP + actions humaines listées | Intégrité service (canari) ; la fuite reste à traiter |
+
+Pendant le playbook DoS, les virements validés sont mis en file d'attente
+(mode dégradé) puis réglés à la clôture de l'incident : la reprise ne perd
+aucun paiement accepté. Chaque incident produit un rapport au format d'une
+notification initiale DORA (chronologie, cause, actions, temps de reprise).
 
 La preuve de reprise n'est **jamais** le simple redémarrage : elle repose sur
 l'exécution réussie d'une **transaction canari** de bout en bout.

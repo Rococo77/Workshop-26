@@ -30,6 +30,8 @@ _events: deque[dict] = deque(maxlen=50)
 # ponytail: rapports en mémoire (perdus au redémarrage du moteur), volume
 # persistant ou envoi à un outil de ticketing si l'archivage DORA est exigé.
 _reports: OrderedDict[str, dict] = OrderedDict()
+# Incident qui a activé le mode dégradé (rapport à compléter à la clôture).
+_degraded_by: str | None = None
 
 
 class Incident(BaseModel):
@@ -76,6 +78,7 @@ def get_status() -> dict:
 def receive_incident(
     incident: Incident, x_remediation_token: str | None = Header(default=None)
 ) -> dict:
+    global _degraded_by
     _auth(x_remediation_token)
     log.info(
         "incident reçu: %s (service=%s, ip=%s, score=%s)",
@@ -109,12 +112,49 @@ def receive_incident(
         "contained": result.contained,
         "outcome": outcome,
     }
+    if result.degraded:
+        _degraded_by = event["report_id"]
     _events.appendleft(event)
     _reports[event["report_id"]] = report.build(event)
     while len(_reports) > 20:
         _reports.popitem(last=False)
     log.info("rapport d'incident généré: %s", event["report_id"])
     return event
+
+
+@app.post("/incident/close")
+def close_incident(x_remediation_token: str | None = Header(default=None)) -> dict:
+    """Le détecteur revoit un trafic normal : on lève le mode dégradé puis on
+    rejoue la file (dans cet ordre : un virement validé entre les deux est
+    réglé directement, aucun n'est oublié)."""
+    global _degraded_by
+    from . import actions
+
+    _auth(x_remediation_token)
+    actions.set_degraded(False)
+    done = actions.replay_queue()
+    if done is None:
+        # API injoignable : la file reste en base, rejouée à son démarrage.
+        return {"replayed": None}
+    if _degraded_by or done["settled"] or done["rejected"]:
+        msg = (
+            f"clôture : mode dégradé levé, {done['settled']} virement(s) en file réglé(s), "
+            f"{done['rejected']} rejeté(s)"
+        )
+        log.info(msg)
+        _append_step(_degraded_by, msg)
+    _degraded_by = None
+    return {"replayed": done}
+
+
+def _append_step(report_id: str | None, msg: str) -> None:
+    entry = {"ts": datetime.now(UTC).isoformat(), "msg": msg}
+    for ev in _events:
+        if ev["report_id"] == report_id:
+            ev["steps"].append(msg)
+    if report_id in _reports:
+        _reports[report_id]["actions"].append(msg)
+        _reports[report_id]["chronology"].append(entry)
 
 
 @app.get("/reports")

@@ -80,6 +80,20 @@ def _send_incident(client: httpx.Client, payload: dict) -> None:
         log.error("envoi incident échoué: %s", exc)
 
 
+def _close_incident(client: httpx.Client) -> None:
+    """Retour au normal : le moteur lève le mode dégradé et règle la file."""
+    try:
+        r = client.post(
+            f"{config.REMEDIATION_URL}/incident/close",
+            headers={"X-Remediation-Token": config.REMEDIATION_API_TOKEN},
+            timeout=60,
+        )
+        r.raise_for_status()
+        log.info("incident clos: %s", r.json())
+    except httpx.HTTPError as exc:
+        log.error("clôture d'incident échouée: %s", exc)
+
+
 def _detection_loop() -> None:
     log.info("boucle de détection démarrée (intervalle=%ss)", config.DETECTION_INTERVAL_SECONDS)
     with httpx.Client(timeout=10) as client:
@@ -141,6 +155,8 @@ def _tick(client: httpx.Client) -> None:
     if not is_anomaly:
         _streak = 0
         _update_state(features, score, "normal")
+        if _open_incident is not None:
+            _close_incident(client)
         _open_incident = None  # incident clos : le prochain sera traité
         return
 

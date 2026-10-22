@@ -14,6 +14,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 EDGE_PORT="${EDGE_PORT:-$(grep -m1 '^EDGE_PORT=' "${ROOT}/.env" 2>/dev/null | cut -d= -f2)}"
 BASE="http://127.0.0.1:${EDGE_PORT:-8080}"
+# Compte de test créé puis supprimé : en local, choisir un nom libre.
+E2E_USER="${E2E_USER:-alice}"
 FAIL=0
 
 log()  { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
@@ -30,8 +32,12 @@ cleanup() {
   fi
   # Compte de test créé par l'auto-inscription (voir plus bas) : jamais de
   # données résiduelles, même en local où la stack/les volumes sont préservés.
-  docker exec ra-postgres psql -U payuser -d paymentdb -c \
-    "DELETE FROM app_user WHERE username = 'alice'" >/dev/null 2>&1 || true
+  # Ses virements d'abord (clés étrangères sans cascade vers payment_tx).
+  docker exec ra-postgres psql -U payuser -d paymentdb -c "
+    DELETE FROM face_verification_log WHERE user_id IN (SELECT id FROM app_user WHERE username = '${E2E_USER}');
+    DELETE FROM payment_tx WHERE src_account IN (SELECT a.id FROM account a
+      JOIN app_user u ON u.id = a.owner_id WHERE u.username = '${E2E_USER}');
+    DELETE FROM app_user WHERE username = '${E2E_USER}';" >/dev/null 2>&1 || true
   rm -f "${TMP_REGISTER_JSON:-}" "${TMP_FACE_JSON:-}"
   # Volumes supprimés en CI uniquement : en local, on préserve les données
   # (Postgres, Grafana, modèle Ollama) et la stack reste démarrée.
@@ -58,13 +64,13 @@ done
 
 log "Auto-inscription — mot de passe + pool de 5 photos (même photo de test)"
 TMP_REGISTER_JSON="$(mktemp)"
-python3 - "$TMP_REGISTER_JSON" <<'PY'
+python3 - "$TMP_REGISTER_JSON" "$E2E_USER" <<'PY'
 import base64, json, sys
 img = base64.b64encode(open("tests/fixtures/sample-face.jpg", "rb").read()).decode()
 poses = ("right", "up", "down", "left", "face")
 json.dump(
     {
-        "username": "alice",
+        "username": sys.argv[2],
         "password": "Alice#2026",
         "consent": True,
         "images": {pose: img for pose in poses},
@@ -79,7 +85,7 @@ REG_TOKEN=$(echo "$REG_BODY" | python3 -c 'import sys,json;print(json.load(sys.s
 
 log "Connexion — mot de passe puis second facteur (même photo, déterministe)"
 LOGIN_BODY=$(curl -s -X POST "$BASE/auth/login" -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"Alice#2026"}')
+  -d '{"username":"'"$E2E_USER"'","password":"Alice#2026"}')
 PENDING=$(echo "$LOGIN_BODY" \
   | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d.get("pending_token") or "")' 2>/dev/null)
 [ -n "$PENDING" ] && ok "login (mot de passe) -> second facteur requis" || ko "login : $LOGIN_BODY"
@@ -101,6 +107,26 @@ canary() {
     "import urllib.request,json;r=urllib.request.urlopen(urllib.request.Request('http://localhost:8000/internal/canary',method='POST'),timeout=5);print(json.load(r).get('canary'))" 2>/dev/null
 }
 [ "$(canary)" = "ok" ] && ok "canari avant incident" || ko "canari avant incident"
+
+log "Mode dégradé — virement validé mis en file, puis réglé au rejeu"
+internal() {  # appel au nom du moteur de remédiation (jeton interne)
+  docker exec ra-payment-api python -c "
+import json,os,sys,urllib.request
+r=urllib.request.Request('http://localhost:8000/internal/'+sys.argv[1],data=sys.argv[2].encode(),
+  headers={'Content-Type':'application/json','X-Remediation-Token':os.environ['REMEDIATION_API_TOKEN']})
+print(urllib.request.urlopen(r,timeout=30).read().decode())" "$1" "$2" 2>/dev/null
+}
+jget() { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
+SRC=$(curl -s "$BASE/api/accounts/me" -H "Authorization: Bearer $TOKEN" | jget 'd[0]["id"]')
+DST=$(docker exec ra-postgres psql -U payuser -d paymentdb -tAc   "SELECT a.id FROM account a JOIN app_user u ON u.id = a.owner_id WHERE u.username = '_canary_dst' LIMIT 1")
+internal degraded '{"enabled": true}' >/dev/null
+TX=$(curl -s -X POST "$BASE/api/transactions" -H "Authorization: Bearer $TOKEN"   -H 'Content-Type: application/json' -d "{\"src_account\":$SRC,\"dst_account\":$DST,\"amount\":\"5.00\"}"   | jget 'd["id"]')
+QUEUED=$(curl -s -X POST "$BASE/api/transactions/$TX/confirm" -H "Authorization: Bearer $TOKEN"   -H 'Content-Type: application/json' --data-binary @"$TMP_FACE_JSON" | jget 'd["status"]')
+[ "$QUEUED" = "queued" ] && ok "virement $TX validé et mis en file" || ko "virement en file : $QUEUED"
+internal degraded '{"enabled": false}' >/dev/null
+REPLAY=$(internal replay '{}')
+STATUS=$(curl -s "$BASE/api/transactions" -H "Authorization: Bearer $TOKEN"   | jget "next(t['status'] for t in d if t['id'] == $TX)")
+[ "$STATUS" = "settled" ] && ok "rejeu : virement $TX réglé ($REPLAY)" || ko "rejeu : $STATUS ($REPLAY)"
 
 log "Attaque — déni de service applicatif (25s)"
 python3 attack/flood.py --target "$BASE" --duration 25 --workers 40 >/dev/null 2>&1 &
@@ -124,6 +150,21 @@ wait "$FLOOD" 2>/dev/null || true
 
 log "Après remédiation — le service est de nouveau utilisable"
 [ "$(canary)" = "ok" ] && ok "canari après remédiation" || ko "canari après remédiation"
+
+log "Comptes leurres — identifiants fuités rejoués"
+python3 attack/leak_replay.py --target "$BASE" >/dev/null 2>&1
+honey=0
+for _ in $(seq 1 24); do
+  sleep 5
+  if docker exec ra-remediation python -c     "import httpx,sys;d=httpx.get('http://localhost:9000/status',timeout=5).json();sys.exit(0 if any(e['type']=='honeytoken_triggered' for e in d['events']) else 1)" 2>/dev/null; then
+    honey=1; break
+  fi
+done
+[ "$honey" = "1" ] && ok "fuite détectée (incident honeytoken_triggered)" || ko "compte leurre non détecté"
+
+log "Rapport d'incident généré automatiquement"
+NREP=$(docker exec ra-remediation python -c   "import httpx;print(len(httpx.get('http://localhost:9000/reports',timeout=5).json()))" 2>/dev/null)
+[ "${NREP:-0}" -ge 2 ] && ok "$NREP rapports (DoS + compte leurre)" || ko "rapports : ${NREP:-0}"
 
 log "Résultat"
 if [ "$FAIL" = "0" ]; then

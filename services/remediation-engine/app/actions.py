@@ -181,6 +181,31 @@ def verify_canary(timeout: float = 5.0) -> bool:
         return False
 
 
+def _payment_internal(path: str, payload: dict | None = None) -> dict | None:
+    try:
+        resp = httpx.post(
+            f"{config.CANARY_TARGET}/internal/{path}",
+            json=payload,
+            headers={"X-Remediation-Token": config.REMEDIATION_API_TOKEN},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("payment-api /internal/%s en échec: %s", path, exc)
+        return None
+
+
+def set_degraded(enabled: bool) -> bool:
+    """Mode dégradé de l'API métier : virements validés mis en file d'attente."""
+    return _payment_internal("degraded", {"enabled": enabled}) is not None
+
+
+def replay_queue() -> dict | None:
+    """Règle les virements en file. None si l'API est injoignable."""
+    return _payment_internal("replay")
+
+
 def blocked_ips() -> list[str]:
     with _lock:
         return sorted(_blocked_ips)

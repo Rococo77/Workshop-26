@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     face_lockout_failures: int = 5
     face_lockout_minutes: int = 15
 
+    # Mode dégradé (file d'attente pendant une remédiation) : piloté par le
+    # moteur de remédiation, seul détenteur de ce jeton interne.
+    remediation_api_token: str = ""
+    degraded_max_minutes: int = 10
+
     @property
     def dsn(self) -> str:
         return (

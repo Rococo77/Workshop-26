@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from decimal import Decimal, InvalidOperation
 from fastapi import (
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Request,
     Response,
@@ -41,8 +43,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("payment-api")
 
 
+def _replay_leftovers() -> None:
+    """Au démarrage, hors mode dégradé : règle les virements restés en file
+    (moteur ou API redémarrés avant la clôture de l'incident)."""
+    try:
+        if not service.degraded(settings.degraded_max_minutes):
+            done = service.replay_queue()
+            if done["settled"] or done["rejected"]:
+                log.info("file d'attente rejouée au démarrage: %s", done)
+    except Exception as exc:
+        log.warning("rejeu au démarrage impossible: %s", exc)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    await asyncio.to_thread(_replay_leftovers)
     task = asyncio.create_task(events.broadcast_loop())
     try:
         yield
@@ -315,6 +330,18 @@ def create_transaction(
         return _create_pending(req, dst_account, amount, principal, response)
 
     try:
+        if service.degraded(settings.degraded_max_minutes):
+            pending = service.create_pending(
+                username=principal.username,
+                src_account=req.src_account,
+                dst_account=dst_account,
+                amount=amount,
+                ttl_seconds=60,
+            )
+            tx = service.queue_pending(pending["id"], principal.username)
+            PAYMENT_TX.labels(result="queued").inc()
+            response.status_code = status.HTTP_202_ACCEPTED
+            return {**tx, "amount": str(tx["amount"])}
         tx = service.transfer(
             username=principal.username,
             src_account=req.src_account,
@@ -440,6 +467,12 @@ def confirm_transaction(
 
     FACE_VERIFICATIONS.labels(purpose="confirm", result="match").inc()
     try:
+        if service.degraded(settings.degraded_max_minutes):
+            # Remédiation en cours : identité validée, règlement différé au rejeu.
+            queued = service.queue_pending(tx_id, user)
+            PAYMENT_TX.labels(result="queued").inc()
+            log.info("virement mis en file (mode dégradé) user=%s tx=%s", user, tx_id)
+            return {**queued, "amount": str(queued["amount"])}
         settled = service.settle_pending(tx_id, user)
     except service.BusinessError as exc:
         PAYMENT_TX.labels(result="rejected").inc()
@@ -543,6 +576,38 @@ def list_transactions(
     except Exception as exc:
         log.error("tx list failed: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
+
+
+class DegradedRequest(BaseModel):
+    enabled: bool
+
+
+def _require_remediation(token: str | None) -> None:
+    """Endpoints internes de pilotage : jeton du moteur de remédiation exigé
+    (en plus du 404 du WAF sur /api/internal/)."""
+    expected = settings.remediation_api_token
+    if not expected or not secrets.compare_digest(token or "", expected):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid remediation token")
+
+
+@app.post("/internal/degraded")
+def internal_degraded(
+    req: DegradedRequest, x_remediation_token: str | None = Header(default=None)
+) -> dict:
+    _require_remediation(x_remediation_token)
+    service.set_degraded(req.enabled)
+    log.warning("mode dégradé %s", "ACTIVÉ" if req.enabled else "levé")
+    return {"degraded": req.enabled}
+
+
+@app.post("/internal/replay")
+def internal_replay(x_remediation_token: str | None = Header(default=None)) -> dict:
+    _require_remediation(x_remediation_token)
+    done = service.replay_queue()
+    PAYMENT_TX.labels(result="settled").inc(done["settled"])
+    PAYMENT_TX.labels(result="rejected").inc(done["rejected"])
+    log.info("file d'attente rejouée: %s", done)
+    return done
 
 
 @app.post("/internal/canary")
