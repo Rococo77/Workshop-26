@@ -45,7 +45,8 @@ def customer_needs_reenrollment(username: str) -> bool:
     normal, pas de bascule vers le parcours de ré-enrôlement."""
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT locked, EXISTS(SELECT 1 FROM face_enrollment e WHERE e.user_id = u.id) AS enrolled "
+            "SELECT locked, EXISTS(SELECT 1 FROM face_enrollment e "
+            "WHERE e.user_id = u.id) AS enrolled "
             "FROM app_user u WHERE u.username = %s AND u.role = 'customer'",
             (username,),
         ).fetchone()
@@ -60,7 +61,8 @@ def list_users() -> list[dict]:
         rows = conn.execute(
             "SELECT u.username, u.role, u.locked, "
             "EXISTS(SELECT 1 FROM face_enrollment e WHERE e.user_id = u.id) AS enrolled, "
-            "(SELECT min(e.created_at) FROM face_enrollment e WHERE e.user_id = u.id) AS enrolled_at "
+            "(SELECT min(e.created_at) FROM face_enrollment e "
+            "WHERE e.user_id = u.id) AS enrolled_at "
             "FROM app_user u ORDER BY u.role, u.username"
         ).fetchall()
     return [
@@ -79,7 +81,9 @@ def set_account_locked(username: str, locked: bool) -> bool:
     """Active/désactive un compte, tous rôles confondus. `False` si le
     compte n'existe pas."""
     with get_conn() as conn:
-        cur = conn.execute("UPDATE app_user SET locked = %s WHERE username = %s", (locked, username))
+        cur = conn.execute(
+            "UPDATE app_user SET locked = %s WHERE username = %s", (locked, username)
+        )
         return cur.rowcount > 0
 
 

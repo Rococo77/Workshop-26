@@ -330,7 +330,9 @@ def login_face(req: FaceImage, principal: Principal = Depends(current_pending_fa
 
 
 @app.post("/auth/login/password")
-def login_password(req: PasswordStep, principal: Principal = Depends(current_pending_password)) -> dict:
+def login_password(
+    req: PasswordStep, principal: Principal = Depends(current_pending_password)
+) -> dict:
     """Étape 3, finale : mot de passe, vérifié seulement après l'identifiant
     et le visage (ordre imposé, §10.1). C'est ici, pas avant, que le login
     est vraiment complet -> c'est ici que l'indicateur LED doit réagir.
@@ -354,7 +356,9 @@ def login_password(req: PasswordStep, principal: Principal = Depends(current_pen
         left = settings.login_lockout_failures - biometrics.recent_failures(
             user, settings.login_lockout_minutes, purpose="login"
         )
-        raise _face_error(status.HTTP_401_UNAUTHORIZED, "invalid_credentials", attempts_left=max(0, left))
+        raise _face_error(
+            status.HTTP_401_UNAUTHORIZED, "invalid_credentials", attempts_left=max(0, left)
+        )
     if row["locked"]:
         events.publish({"purpose": "login", "state": "locked"})
         raise HTTPException(status.HTTP_403_FORBIDDEN, "account locked")

@@ -48,9 +48,7 @@ _lock = threading.Lock()
 # ce qui est précisément ce qu'on veut prouver. Les rares requêtes qui passent la
 # limite sont rejetées par l'API en 401/403 (pas de jeton `face_pending`), avant
 # tout calcul biométrique -> la plupart n'atteignent jamais l'API (429 au WAF).
-_FAKE_IMG = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-)
+_FAKE_IMG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="  # noqa: E501
 
 
 def _specs(scenario: str) -> list[tuple[str, str, dict | None]]:
@@ -108,7 +106,10 @@ def main() -> None:
 
     target = args.target.rstrip("/")
     specs = _specs(args.scenario)
-    print(f"[flood] cible={target} scénario={args.scenario} durée={args.duration}s workers={args.workers}")
+    print(
+        f"[flood] cible={target} scénario={args.scenario} "
+        f"durée={args.duration}s workers={args.workers}"
+    )
     print("        endpoints : " + ", ".join(f"{m} {path}" for m, path, _ in specs))
 
     stop = threading.Event()

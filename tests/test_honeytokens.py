@@ -80,7 +80,7 @@ def test_connexion_compte_leurre_refusee_et_signalee(monkeypatch):
 # pendant la résolution d'un conflit sur ce fichier (§10.1 — le parcours client
 # identifiant->visage->mot de passe vit entièrement dans payment-api, jamais
 # via cet endpoint). Sans ces tests, rien ne l'aurait détecté.
-_PASSWORD = "correct-horse-battery-staple"
+_PASSWORD = "correct-horse-battery-staple"  # noqa: S105 (mot de passe de test)
 
 
 def _user(role: str, locked: bool = False) -> dict:

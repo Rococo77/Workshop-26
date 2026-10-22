@@ -18,7 +18,7 @@ _bearer = HTTPBearer(auto_error=True)
 # complet, lui, ne porte aucun claim `typ`). Parcours client (§10.1) :
 # identifiant -> face_pending -> visage -> password_pending -> mot de passe.
 _FACE_PENDING_TYP = "face_pending"
-_PASSWORD_PENDING_TYP = "password_pending"
+_PASSWORD_PENDING_TYP = "password_pending"  # noqa: S105 (type de jeton, pas un secret)
 
 
 class Principal(BaseModel):
