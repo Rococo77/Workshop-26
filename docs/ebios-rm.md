@@ -45,6 +45,9 @@ Couples SR/OV prioritaires retenus : **SR1→ER1** (DoS), **SR2→ER2/ER3**
   groupe → indisponibilité (ER1). *Chemin* : Internet/LAN → WAF → API.
 - **SS2 (Injection)** : injection SQL sur l'authentification / les paramètres
   → altération ou exfiltration (ER2/ER3). *Chemin* : WAF → API → base.
+- **SS2ter (Réutilisation de données fuitées)** : un extrait de la base de
+  comptes sort (injection réussie, sauvegarde volée, complicité interne) puis
+  sert à se connecter ou à viser des IBAN (ER3). *Chemin* : WAF → auth / API.
 - **SS3 (Abus de l'automate)** : compromission du moteur de remédiation
   (socket Docker) → élévation de privilèges (ER4). *Chemin* : `app`/`control`.
 
@@ -55,6 +58,7 @@ Couples SR/OV prioritaires retenus : **SR1→ER1** (DoS), **SR2→ER2/ER3**
 | SS1 | Flood HTTP multi-thread sur `/api/*` jusqu'à saturation CPU/latence | **V3 — Vraisemblable** |
 | SS2 | Payloads SQLi (`' OR '1'='1`, UNION, pg_sleep) sur `/auth/login`, `/api/auth/register` | **V3 — Vraisemblable** |
 | SS2bis | Credential stuffing / brute force sur `/auth/login` puis `/api/auth/login/face` (second facteur) ; création massive de faux comptes sur `/api/auth/register` | V2 — Possible |
+| SS2ter | Rejeu des identifiants et IBAN d'un extrait de `app_user` / `account` (`attack/leak_replay.py`) | V2 — Possible |
 | SS3 | Accès au socket Docker, création/execution de conteneur privilégié, pivot | V2 — Possible |
 
 ## Atelier 5 — Traitement du risque
@@ -65,7 +69,8 @@ Couples SR/OV prioritaires retenus : **SR1→ER1** (DoS), **SR2→ER2/ER3**
 | SS2 (Injection) | Requêtes **paramétrées**, OWASP CRS (403), détection `injection_attempt`, confinement IP | 0-day CRS ; WAF en contournement si règle manquante |
 | SS3 (Abus automate) | Réseau `control` isolé, **allowlist** conteneurs/playbooks, pas d'UI admin exposée, socket non partagé aux services métier | Socket Docker = root-equivalent : en prod, RBAC/Operator + audit |
 | SS2bis (Stuffing / faux comptes) | Second facteur visage obligatoire (un mot de passe volé ne suffit pas), zone WAF dédiée 2 req/s (`/api/auth/register`, `/api/auth/login/face`), verrou après 5 échecs/15 min (visage), jeton intermédiaire `face_pending` de ~2 min sans accès métier | Le visage seul n'est pas un secret opposable (deepfake) : anti-spoofing (FasNet) atténue, pas d'authentification « vivante » garantie en démonstrateur |
-| ER3 (Exfiltration) | Pagination bornée, auth obligatoire, endpoint interne masqué (404), logs d'investigation | Fuite via canal légitime non détectée |
+| ER3 (Exfiltration) | Pagination bornée, auth obligatoire, endpoint interne masqué (404), logs d'investigation ; comptes leurres : une réponse HTTP qui en contient une valeur est bloquée et alerte | Une fuite qui ne touche aucune valeur leurre (extraction ciblée) reste invisible |
+| SS2ter (Données fuitées réutilisées) | Comptes leurres : connexion ou virement vers eux = incident `honeytoken_triggered` sans ML, source confinée, actions humaines listées dans le rapport | La fuite n'est vue qu'à sa réutilisation ; l'origine reste à investiguer |
 
 ### Mesures transverses
 - Moindre privilège (utilisateurs non-root dans les conteneurs, allowlists).

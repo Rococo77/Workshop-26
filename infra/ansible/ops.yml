@@ -9,6 +9,7 @@
 #    ansible-playbook ops.yml -e action=status
 #    ansible-playbook ops.yml -e action=restart_api
 #    ansible-playbook ops.yml -e action=backup_db
+#    ansible-playbook ops.yml -e action=migrate
 # ============================================================================
 - name: Opérations d'exploitation
   hosts: host
@@ -37,3 +38,19 @@
         chdir: "{{ playbook_dir }}/../.."
       changed_when: true
       when: action == "backup_db"
+
+    # PostgreSQL n'exécute db/init/ qu'à la création du volume pgdata : une base
+    # plus ancienne rejoue les migrations 03+ (idempotentes, dans l'ordre ;
+    # 01 schéma et 02 seed ne servent qu'à la création).
+    - name: Migrations du schéma sur une base existante
+      ansible.builtin.shell: |
+        set -e
+        for f in services/payment-api/db/init/0[3-9]_*.sql; do
+          echo "== $f"
+          docker exec -i ra-postgres sh -c 'psql -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$f"
+        done
+      args:
+        chdir: "{{ playbook_dir }}/../.."
+        executable: /bin/bash
+      changed_when: true
+      when: action == "migrate"
