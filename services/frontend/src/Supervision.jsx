@@ -255,6 +255,11 @@ function Console({ token, onAuthError, onLogout }) {
       <header className="border-b border-rule bg-white">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-4">
           <span className="text-xl font-bold tracking-tight text-petrol">Alpha</span>
+          {import.meta.env.VITE_NUM_GROUPE && (
+            <span className="text-xs font-medium uppercase tracking-wide text-ink/50">
+              Groupe {import.meta.env.VITE_NUM_GROUPE}
+            </span>
+          )}
           <span className="font-medium">Supervision de la reprise</span>
           <span className="ml-auto text-sm text-ink/60" aria-live="polite">
             {stale

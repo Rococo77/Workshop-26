@@ -103,7 +103,10 @@ services:
   # ------------------------------------------------------------- Frontend React
   frontend:
     <<: *sec
-    build: ./services/frontend
+    build:
+      context: ./services/frontend
+      args:
+        VITE_NUM_GROUPE: "${NUM_GROUPE:-}"
     container_name: ra-frontend
     restart: unless-stopped
     pids_limit: 200

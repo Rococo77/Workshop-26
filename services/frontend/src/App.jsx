@@ -39,6 +39,14 @@ function Wordmark({ className = "" }) {
   return <span className={`text-xl font-bold tracking-tight ${className}`}>Alpha</span>;
 }
 
+// Numéro de groupe (NUM_GROUPE du .env, embarqué au build par Vite) : affiché
+// à côté du logo pour identifier l'instance pendant la recette/le live.
+function GroupBadge({ className = "" }) {
+  const groupe = import.meta.env.VITE_NUM_GROUPE;
+  if (!groupe) return null;
+  return <span className={`text-xs font-medium uppercase tracking-wide ${className}`}>Groupe {groupe}</span>;
+}
+
 // Habillage commun aux écrans de connexion/inscription (bandeau + formulaire).
 function AuthShell({ title, subtitle, children, footer }) {
   return (
@@ -46,6 +54,7 @@ function AuthShell({ title, subtitle, children, footer }) {
       <aside className="relative hidden overflow-hidden bg-petrol p-12 text-white lg:flex lg:flex-col">
         <Guilloche className="absolute inset-0 h-full w-full text-line/30" />
         <Wordmark className="relative text-2xl" />
+        <GroupBadge className="relative mt-1 text-white/50" />
         <div className="relative mt-auto max-w-md">
           <p className="text-[2.5rem] font-semibold leading-[1.1] tracking-tight">
             Envoyez de l&apos;argent en quelques secondes.
@@ -59,6 +68,7 @@ function AuthShell({ title, subtitle, children, footer }) {
 
       <main className="flex flex-col px-6 py-10 sm:px-12">
         <Wordmark className="text-petrol lg:hidden" />
+        <GroupBadge className="text-ink/40 lg:hidden" />
         <div className="m-auto w-full max-w-sm">
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           {subtitle && <p className="mt-2 text-sm text-ink/70">{subtitle}</p>}
@@ -400,6 +410,7 @@ function Banking({ session, onLogout }) {
       <header className="border-b border-rule bg-white">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-4">
           <Wordmark className="text-petrol" />
+          <GroupBadge className="text-ink/50" />
           <StatusPill state={status} />
           <div className="ml-auto flex items-center gap-4 text-sm">
             <span className="capitalize text-ink/75">{username}</span>
