@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
-from . import accounts, biometrics, db, events, face, service
+from . import accounts, biometrics, db, events, face, honeytokens, service
 from .auth import (
     Principal,
     create_access_token,
@@ -49,8 +49,6 @@ from .auth import (
     current_pending_face,
     current_pending_password,
 )
-from . import accounts, biometrics, db, events, face, honeytokens, service
-from .auth import Principal, create_access_token, current_customer, current_pending_face
 from .config import settings
 from .metrics import FACE_LATENCY, FACE_VERIFICATIONS, PAYMENT_TX, MetricsMiddleware
 

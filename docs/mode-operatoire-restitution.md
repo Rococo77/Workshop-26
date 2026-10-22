@@ -5,6 +5,40 @@
 > est gitignored, je ne l'ai pas lu). Si un point ci-dessous ne correspond pas au texte réel
 > du sujet, corrige la case concernée avant de coder dessus.
 
+## Vérification après merge de `main` (22/10/2026)
+
+Le merge a touché 5 fichiers en commun avec ce travail (conflits résolus manuellement) :
+`services/auth/app/{main,db}.py`, `services/frontend/src/{Supervision.jsx,api.js}`,
+`services/payment-api/app/main.py`. Audit complet (diff contre le dernier commit d'avant
+merge, pas juste relecture visuelle) :
+
+- **Régression trouvée et corrigée** : la résolution de conflit sur `services/auth/app/main.py`
+  avait fait disparaître le filtre `role == "customer"` dans `/login` — un compte client aurait
+  pu obtenir un jeton complet par ce seul endpoint (mot de passe), en contournant tout le
+  parcours identifiant→visage→mot de passe du §10.1 (1.1). Remis en place.
+- **Dette corrigée** : `has_face_enrollment` (dead code, déjà supprimé en 1.1) était revenu dans
+  `services/auth/app/db.py` via le merge — resupprimé. Import dupliqué dans
+  `services/payment-api/app/main.py` (artefact de résolution de conflit, pas un bug fonctionnel
+  mais trompeur) — nettoyé.
+- **Angle mort comblé** : aucun test ne couvrait `POST /login` du service `auth` lui-même (seul
+  `payment-api`'s `auth.py` — un module différent du même nom — était testé) ; c'est pour ça que
+  rien n'a signalé la régression. Ajout de 3 tests dans `tests/test_honeytokens.py` (déjà le
+  fichier qui charge ce module, pour éviter une double exécution des compteurs Prometheus qui
+  fait planter la collecte pytest si on le recharge depuis un second fichier).
+- **Tout le reste** (1.2 à 1.5 : reset identifiant/caméra, seuils de blocage, back-office complet,
+  LED 5 états) relu intégralement et confirmé intact, correctement recombiné avec les nouveautés
+  de `main` (honeytokens, mode dégradé, rapport DORA) sans collision fonctionnelle.
+- Suite de tests complète relancée avec toutes les dépendances optionnelles installées
+  (plus aucun skip) : **103 passed**. Revérifié en direct via le WAF après rebuild
+  `auth`+`payment-api` : login admin/operator OK, bascule customer→401 confirmée, back-office
+  (liste, PATCH verrouillage/rôle, garde anti-auto-modification) OK, cycle LED
+  `checking`→`fail` reconfirmé sur la vraie carte (toujours connectée après tous ces redémarrages).
+- **Non vérifié, hors périmètre de cet audit** : `ml-detector` et `remediation-engine` tournent
+  encore sur des images non reconstruites depuis le merge (3h d'uptime vs peu de minutes pour
+  `auth`/`payment-api`/`waf`), alors que `main` y a changé du code (détection honeytoken, mode
+  dégradé). Pas touché par mon travail, mais à reconstruire avant de considérer la stack
+  entièrement à jour.
+
 ## 0. Pré-requis avant de commencer
 
 - [x] Numéro de groupe : **1**. Ajouté comme variable `NUM_GROUPE` dans `.env`/`.env.example`,

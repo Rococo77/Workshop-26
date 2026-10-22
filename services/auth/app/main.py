@@ -75,7 +75,14 @@ def login(req: LoginRequest, request: Request) -> TokenResponse:
             req.username,
             request.headers.get("x-real-ip", "-"),
         )
-    if user is None or not verify_password(req.password, user["password_hash"]):
+    if (
+        user is None
+        or not verify_password(req.password, user["password_hash"])
+        or user["role"] == "customer"
+    ):
+        # `customer` inclus ici (pas de branche dédiée) : ce compte doit
+        # passer par payment-api, pas par cet endpoint -> même message
+        # générique, pas d'oracle sur l'existence ou le rôle du compte.
         LOGIN_ATTEMPTS.labels(result="failure").inc()
         LOGIN_FAILURES.labels(reason="bad_credentials").inc()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")

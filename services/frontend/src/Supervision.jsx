@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { listUsers, resetCustomerFace, updateUser } from "./api.js";
-import { getOverview, getReport, login, summarizeReport } from "./api.js";
+import { getOverview, getReport, listUsers, login, resetCustomerFace, summarizeReport, updateUser } from "./api.js";
 import ScoreChart from "./components/ScoreChart.jsx";
 
 // Supervision de la reprise (jury, opérateur) : raconte l'incident avant /
