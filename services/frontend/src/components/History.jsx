@@ -5,10 +5,12 @@ const REJECTED = {
   cancelled: "Annulé",
   face_mismatch: "Refusé, visage non reconnu",
   insufficient_funds: "Refusé, solde insuffisant",
+  replay_failed: "Refusé à la reprise",
 };
 
 function statusLabel(t) {
   if (t.status === "pending") return "En attente de validation";
+  if (t.status === "queued") return "En file d'attente, exécution après l'incident";
   if (t.status === "rejected") return REJECTED[t.reject_reason] || "Refusé";
   return null;
 }
@@ -35,7 +37,7 @@ export default function History({ transactions }) {
             const amountTone =
               t.status === "rejected"
                 ? "text-ink/40 line-through"
-                : t.status === "pending"
+                : t.status === "pending" || t.status === "queued"
                   ? "text-ink/50"
                   : t.outgoing
                     ? "text-debit"
@@ -54,7 +56,9 @@ export default function History({ transactions }) {
                     {formatDate(t.created_at)}, réf. <span className="tabular">{t.reference}</span>
                   </p>
                   {label && (
-                    <p className={`text-[13px] font-medium ${t.status === "pending" ? "text-warn" : "text-debit"}`}>
+                    <p
+                      className={`text-[13px] font-medium ${t.status === "rejected" ? "text-debit" : "text-warn"}`}
+                    >
                       {label}
                     </p>
                   )}

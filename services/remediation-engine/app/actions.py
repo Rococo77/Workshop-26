@@ -26,6 +26,9 @@ _docker: docker.DockerClient | None = None
 _blocked_ips: set[str] = set()
 _lock = threading.Lock()
 
+# Journal d'un piège déclenché (services auth / payment-api) : "HONEYTOKEN ... ip=<ip>"
+_HONEY_RE = re.compile(r"HONEYTOKEN .* ip=(\S+)")
+
 # Ligne access nginx : "<ip> - - [date] \"METHOD path\" <status> ..."
 _ACCESS_RE = re.compile(r'^(\d{1,3}(?:\.\d{1,3}){3})\s.*"\s*\S+ [^"]*"\s+(\d{3})')
 
@@ -145,6 +148,22 @@ def top_attacker_ip(window_s: int = 120) -> str | None:
     return ip
 
 
+def honeytoken_source_ip(window_s: int = 120) -> str | None:
+    """IP qui a utilisé un compte leurre, lue dans les journaux des services
+    qui portent les pièges (relayée par le WAF dans X-Real-IP)."""
+    for name in config.HONEYTOKEN_CONTAINERS:
+        try:
+            raw = _client().containers.get(name).logs(since=int(time.time()) - window_s)
+        except docker.errors.DockerException as exc:
+            log.error("lecture des logs %s impossible: %s", name, exc)
+            continue
+        for line in reversed(raw.decode("utf-8", errors="replace").splitlines()):
+            m = _HONEY_RE.search(line)
+            if m and _valid_ip(m.group(1)):
+                return m.group(1)
+    return None
+
+
 def verify_canary(timeout: float = 5.0) -> bool:
     """Prouve le retour à un état utilisable via une transaction canari réelle.
 
@@ -160,6 +179,31 @@ def verify_canary(timeout: float = 5.0) -> bool:
     except (httpx.HTTPError, ValueError) as exc:
         log.warning("canari injoignable: %s", exc)
         return False
+
+
+def _payment_internal(path: str, payload: dict | None = None) -> dict | None:
+    try:
+        resp = httpx.post(
+            f"{config.CANARY_TARGET}/internal/{path}",
+            json=payload,
+            headers={"X-Remediation-Token": config.REMEDIATION_API_TOKEN},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("payment-api /internal/%s en échec: %s", path, exc)
+        return None
+
+
+def set_degraded(enabled: bool) -> bool:
+    """Mode dégradé de l'API métier : virements validés mis en file d'attente."""
+    return _payment_internal("degraded", {"enabled": enabled}) is not None
+
+
+def replay_queue() -> dict | None:
+    """Règle les virements en file. None si l'API est injoignable."""
+    return _payment_internal("replay")
 
 
 def blocked_ips() -> list[str]:

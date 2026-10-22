@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { getOverview, listUsers, login, resetCustomerFace, updateUser } from "./api.js";
+import { listUsers, resetCustomerFace, updateUser } from "./api.js";
+import { getOverview, getReport, login, summarizeReport } from "./api.js";
 import ScoreChart from "./components/ScoreChart.jsx";
 
 // Supervision de la reprise (jury, opérateur) : raconte l'incident avant /
@@ -14,6 +15,7 @@ const INCIDENT = {
   dos_flood: "Déni de service",
   injection_attempt: "Tentative d'injection",
   service_unavailable: "Service indisponible",
+  honeytoken_triggered: "Compte leurre utilisé",
 };
 const COMPONENT = {
   waf: "WAF, point d'entrée",
@@ -47,6 +49,7 @@ const firstProof = (events, startedAt) =>
 function phaseOf(data, now, proof) {
   const decision = data.detector?.last_decision || "normal";
   const last = data.remediation?.events?.[0];
+  if (decision === "honeytoken_triggered") return { kind: "compromised", event: last };
   if (isIncident(data)) {
     // Le modèle voit encore l'attaque (fenêtre glissante) mais la reprise est
     // déjà prouvée : le service est maintenu, ce n'est plus une panne.
@@ -54,6 +57,8 @@ function phaseOf(data, now, proof) {
     return { kind: "incident", decision, down: CRITICAL.filter((s) => data.services?.[s] === false) };
   }
   if (last && now - Date.parse(last.ts) < RECENT_MS) {
+    // Fuite de données : le service tourne, mais ce n'est pas une « reprise ».
+    if (last.type === "honeytoken_triggered") return { kind: "compromised", event: last };
     return { kind: last.recovered ? "recovered" : last.contained ? "contained" : "failed", event: last };
   }
   return { kind: "nominal" };
@@ -322,7 +327,7 @@ function Console({ token, role, selfUsername, onAuthError, onLogout }) {
             ) : (
               <ol className="mt-4 space-y-4">
                 {events.slice(0, 8).map((ev) => (
-                  <EventCard key={ev.ts} ev={ev} />
+                  <EventCard key={ev.ts} ev={ev} token={token} />
                 ))}
               </ol>
             )}
@@ -544,6 +549,11 @@ function PhaseBanner({ phase, score, startedAt, measured, now }) {
           }`
         : "",
     ],
+    compromised: [
+      "bg-debit text-white",
+      "Fuite de données détectée",
+      "Un compte leurre a été utilisé : la base de comptes a fuité. Source confinée, service maintenu. Investigation et notification à engager.",
+    ],
     contained: [
       "bg-warn text-white",
       "Attaque confinée, reprise non prouvée",
@@ -580,8 +590,9 @@ const OUTCOME = {
   failed: ["text-debit", "Reprise non prouvée"],
 };
 
-function EventCard({ ev }) {
+function EventCard({ ev, token }) {
   const [color, label] = OUTCOME[ev.outcome] || OUTCOME.failed;
+  const [open, setOpen] = useState(false);
   return (
     <li className="rounded-2xl border border-rule bg-white p-5">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -598,7 +609,81 @@ function EventCard({ ev }) {
           <li key={i}>{s}</li>
         ))}
       </ol>
+      {ev.report_id && (
+        <button
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="mt-4 text-sm font-semibold text-petrol hover:underline"
+        >
+          {open ? "Masquer le rapport d'incident" : "Rapport d'incident (notification DORA)"}
+        </button>
+      )}
+      {open && <ReportPanel id={ev.report_id} token={token} />}
     </li>
+  );
+}
+
+// Rapport généré par le moteur, sans action humaine. Le résumé direction est
+// rédigé à la demande par l'assistant LLM (profil `ai`, lecture seule).
+function ReportPanel({ id, token }) {
+  const [report, setReport] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    getReport(token, id).then(setReport, (err) => setError(err.message));
+  }, [id, token]);
+
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([report.markdown], { type: "text/markdown" }));
+    const a = Object.assign(document.createElement("a"), { href: url, download: `${id}.md` });
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const summarize = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setSummary((await summarizeReport(token, id)).summary);
+    } catch (err) {
+      setError(err.status === 503 ? "Assistant IA indisponible (profil ai non démarré)." : err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 space-y-3">
+      {report && (
+        <>
+          <p className="text-sm">
+            Temps de reprise :{" "}
+            <span className="tabular font-semibold">
+              {report.recovery_seconds !== null ? `${report.recovery_seconds} s` : "non prouvée"}
+            </span>
+          </p>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl bg-paper p-4 text-[13px] leading-relaxed">
+            {report.markdown}
+          </pre>
+          <div className="flex flex-wrap gap-4">
+            <button onClick={download} className="text-sm font-semibold text-petrol hover:underline">
+              Télécharger (.md)
+            </button>
+            <button
+              onClick={summarize}
+              disabled={busy}
+              className="text-sm font-semibold text-petrol hover:underline disabled:opacity-50"
+            >
+              {busy ? "Rédaction par l'assistant…" : "Résumé pour la direction (assistant IA)"}
+            </button>
+          </div>
+        </>
+      )}
+      {summary && <p className="rounded-xl border border-rule p-4 text-sm leading-relaxed">{summary}</p>}
+      <div aria-live="polite">{error && <p className="text-sm text-debit">{error}</p>}</div>
+    </div>
   );
 }
 

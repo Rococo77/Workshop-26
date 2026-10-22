@@ -66,7 +66,7 @@ tout seul pendant l'incident. Cette séparation est volontaire (sujet §3.4).
 | `harden.yml` | Vérifie la posture de sécurité (+ pare-feu hôte optionnel). |
 | `backup.yml` | Sauvegarde logique PostgreSQL (dump horodaté + rétention). |
 | `restore.yml` | Restauration PRA **vérifiée** par transaction canari. |
-| `ops.yml` | Opérations courantes (`status` / `restart_api` / `backup_db`). |
+| `ops.yml` | Opérations courantes (`status` / `restart_api` / `backup_db` / `migrate`). |
 
 ---
 
@@ -118,7 +118,9 @@ sauvegarde n'a de valeur que si la restauration est démontrée.
 
 ### `ops.yml` — exploitation courante
 `-e action=status` (état des conteneurs), `restart_api` (relance ciblée),
-`backup_db` (dump rapide). Filet d'exploitation hors incident.
+`backup_db` (dump rapide), `migrate` (rejoue dans l'ordre les scripts
+idempotents de `services/payment-api/db/init/` sur une base créée avant leur
+ajout, ex. comptes leurres et mode dégradé). Filet d'exploitation hors incident.
 
 ---
 

@@ -26,6 +26,11 @@ PAYMENT_TX = Counter("payment_tx_total", "Transactions métier", ["result"])
 FACE_VERIFICATIONS = Counter(
     "face_verifications_total", "Vérifications faciales", ["purpose", "result"]
 )
+# Comptes leurres (honeytokens.py) : séries créées à 0 au démarrage, sinon
+# increase() ignore le premier déclenchement.
+HONEYTOKEN = Counter("honeytoken_triggers_total", "Comptes leurres utilisés", ["kind"])
+for _kind in ("transfer", "exfiltration"):
+    HONEYTOKEN.labels(kind=_kind)
 FACE_LATENCY = Histogram(
     "face_verification_duration_seconds",
     "Latence de l'API DeepFace",

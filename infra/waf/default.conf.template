@@ -128,6 +128,16 @@ server {
     }
 
     # Supervision (lecture seule) pour le dashboard React.
+    # Résumé direction d'un rapport d'incident : rédigé par le LLM local (CPU),
+    # jusqu'à ~1 min -> délai plus long, uniquement sur cette route.
+    location ~ ^/supervision/reports/[^/]+/summary$ {
+        limit_req zone=perip burst=5 nodelay;
+        rewrite ^/supervision/(.*)$ /$1 break;
+        proxy_pass http://$up_bff;
+        proxy_set_header Host $host;
+        proxy_read_timeout 130s;
+    }
+
     location /supervision/ {
         limit_req zone=perip burst=30 nodelay;
         rewrite ^/supervision/(.*)$ /$1 break;

@@ -34,6 +34,7 @@ _last_sent = 0.0
 _open_incident: str | None = None
 _last_outcome: str | None = None
 _streak = 0  # points anormaux consécutifs (confirmation avant incident)
+_streak_since: str | None = None  # horodatage du premier point de la série
 
 
 def _should_send(incident_type: str, in_cooldown: bool) -> bool:
@@ -79,6 +80,20 @@ def _send_incident(client: httpx.Client, payload: dict) -> None:
         log.error("envoi incident échoué: %s", exc)
 
 
+def _close_incident(client: httpx.Client) -> None:
+    """Retour au normal : le moteur lève le mode dégradé et règle la file."""
+    try:
+        r = client.post(
+            f"{config.REMEDIATION_URL}/incident/close",
+            headers={"X-Remediation-Token": config.REMEDIATION_API_TOKEN},
+            timeout=60,
+        )
+        r.raise_for_status()
+        log.info("incident clos: %s", r.json())
+    except httpx.HTTPError as exc:
+        log.error("clôture d'incident échouée: %s", exc)
+
+
 def _detection_loop() -> None:
     log.info("boucle de détection démarrée (intervalle=%ss)", config.DETECTION_INTERVAL_SECONDS)
     with httpx.Client(timeout=10) as client:
@@ -91,7 +106,7 @@ def _detection_loop() -> None:
 
 
 def _tick(client: httpx.Client) -> None:
-    global _open_incident, _streak
+    global _open_incident, _streak, _streak_since
     now = time.monotonic()
     in_cooldown = (now - _last_sent) < config.COOLDOWN_SECONDS
 
@@ -108,11 +123,31 @@ def _tick(client: httpx.Client) -> None:
                     "service": "payment-api",
                     "detail": "API de paiement injoignable (up==0)",
                     "anomaly_score": 1.0,
+                    "detected_at": datetime.now(UTC).isoformat(),
                 },
             )
         return
 
-    # Cas 2 : détection ML sur le vecteur de features.
+    # Cas 2 : compte leurre utilisé -> fuite de la base prouvée (pas besoin du ML).
+    kinds = sources.honeytoken_kinds(client)
+    if kinds:
+        ANOMALY_SCORE.set(1.0)
+        _update_state({}, 1.0, "honeytoken_triggered")
+        DETECTIONS.labels(incident_type="honeytoken_triggered").inc()
+        if _should_send("honeytoken_triggered", in_cooldown):
+            _send_incident(
+                client,
+                {
+                    "type": "honeytoken_triggered",
+                    "service": "payment-api",
+                    "detail": "compte leurre utilisé: " + ", ".join(kinds),
+                    "anomaly_score": 1.0,
+                    "detected_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        return
+
+    # Cas 3 : détection ML sur le vecteur de features.
     features = sources.collect_features(client)
     is_anomaly, score, contributions = _model.score(features)
     ANOMALY_SCORE.set(score)
@@ -120,10 +155,14 @@ def _tick(client: httpx.Client) -> None:
     if not is_anomaly:
         _streak = 0
         _update_state(features, score, "normal")
+        if _open_incident is not None:
+            _close_incident(client)
         _open_incident = None  # incident clos : le prochain sera traité
         return
 
     _streak += 1
+    if _streak == 1:
+        _streak_since = datetime.now(UTC).isoformat()
     if _streak < config.CONFIRM_POINTS:
         _update_state(features, score, "normal")
         log.info(
@@ -146,6 +185,7 @@ def _tick(client: httpx.Client) -> None:
                 "service": "payment-api",
                 "source_ip": None,
                 "anomaly_score": round(score, 3),
+                "detected_at": _streak_since,
                 "detail": "features anormales: " + ", ".join(drivers)
                 if drivers
                 else "profil anormal",

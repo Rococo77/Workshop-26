@@ -14,7 +14,7 @@ décision → remédiation → vérification**, sans intervention humaine.
 
 ```
         PC ATTAQUANT                    point d'accès RESILIENCE-G1 (192.168.137.0/24)
-   flood / sqli / exfil ──┐                    ESP8266 (LED) ──WebSocket──┐
+   flood / sqli / leak ───┐                    ESP8266 (LED) ──WebSocket──┐
                           ▼                                               ▼
 ┌───────────────────────────── PC HÔTE (Docker) ─────────────────────────────────┐
 │ [edge]   WAF ModSecurity + OWASP CRS · rate limit · blocklist   :8080 (EDGE_BIND)│
@@ -51,6 +51,9 @@ décision → remédiation → vérification**, sans intervention humaine.
 3. `payment-api` exécute un **virement atomique** (verrou pessimiste ordonné,
    contrôle de solde, écriture transactionnelle) sur PostgreSQL.
 4. Chaque requête émet des métriques Prometheus (taux, latence, statut, métier).
+5. Pendant la remédiation d'un DoS, l'API passe en **mode dégradé** : un
+   virement validé par le visage est mis en file (`queued`) au lieu d'être
+   réglé, puis réglé à la clôture de l'incident (voir §4).
 
 ### 3.1 Auto-inscription et connexion à deux facteurs (mot de passe + visage)
 
@@ -137,17 +140,24 @@ réseau pédagogique : seul le WAF (et Grafana pour l'observation jury) est expo
 flood/sqli ──▶ WAF (bloque/trace) ──▶ métriques+logs ──▶ Prometheus/Loki
                                                               │
                                    ml-detector (toutes les 10s) :
-                                   1. collecte le vecteur de features
-                                   2. score IsolationForest (anomalie ?)
-                                   3. si anomalie : qualifie (SIEM/Loki) + IP source
+                                   1. service injoignable ou compte leurre
+                                      utilisé ? -> incident direct, sans ML
+                                   2. sinon : features + score IsolationForest
+                                   3. 2 points anormaux consécutifs : qualifie
                                    4. POST /incident (jeton interne)
                                                               │
                                    remediation-engine :
                                    5. playbook selon le type d'incident
+                                      (DoS : mode dégradé activé d'abord)
                                    6. action (block IP WAF / restart conteneur)
                                    7. VÉRIFIE par transaction canari réelle
+                                   8. rapport d'incident (notification DORA)
                                                               │
-                                   dashboard : score, IP bloquée, reprise prouvée
+                                   retour au normal : POST /incident/close
+                                   9. mode dégradé levé, file de virements réglée
+                                                              │
+                                   dashboard : score, IP bloquée, reprise prouvée,
+                                   rapport téléchargeable
 ```
 
 Points clés de conception :
@@ -159,8 +169,20 @@ Points clés de conception :
   reprise n'est validée que si une **transaction canari** (débit→crédit→écriture)
   réussit. C'est ce que vérifie le moteur avant de déclarer le service rétabli.
 - **Disponibilité ≠ compromission.** Deux familles de playbooks distinctes :
-  `dos_flood`/`service_unavailable` (rétablir) vs `injection_attempt` (confiner +
-  tracer, sans prétendre « réparer » un service qui répond toujours).
+  `dos_flood`/`service_unavailable` (rétablir) vs `injection_attempt` et
+  `honeytoken_triggered` (confiner + tracer, sans prétendre « réparer » un
+  service qui répond toujours ; une fuite se traite par des humains).
+- **Aucun paiement accepté n'est perdu.** Pendant la remédiation d'un DoS,
+  les virements validés attendent en base (`queued`) ; les fonds ne bougent
+  qu'au rejeu, un virement par transaction SQL, solde revérifié sous verrou
+  (`FOR UPDATE SKIP LOCKED`). Le mode expire seul au bout de 10 min et l'API
+  rejoue la file à son démarrage.
+- **Rapport produit sans humain.** Après chaque incident, le moteur écrit un
+  rapport au format d'une notification initiale DORA : chronologie depuis le
+  premier point anormal, cause, actions, temps de reprise. La classification
+  « majeur » et l'envoi à l'autorité restent humains. L'assistant RAG peut en
+  rédiger un résumé pour la direction, en lisant le rapport (GET) sans droit
+  d'action.
 
 ## 5. Détection — modèle et données
 
@@ -192,8 +214,17 @@ Points clés de conception :
   socket Docker, mais tourne sur un réseau `control` isolé, **sans UI d'admin
   exposée**, avec une **allowlist** de conteneurs (la base n'est jamais
   redémarrée automatiquement) et une allowlist de playbooks.
-- **Assistant IA sans privilège** : le RAG lit un corpus documentaire en lecture
-  seule ; il ne peut pas agir sur le système et est distinct de l'automate.
+- **Assistant IA sans privilège** : le RAG lit un corpus documentaire et les
+  rapports d'incident en lecture seule ; il ne peut pas agir sur le système et
+  est distinct de l'automate.
+- **Comptes leurres (honeytokens)** : deux utilisateurs et un IBAN que personne
+  n'utilise, listés dans une table à part (`app_user` ne les distingue pas).
+  Une connexion avec l'un d'eux, un virement vers l'IBAN ou une réponse HTTP
+  qui contient l'une de ces valeurs (bloquée et remplacée par une 500) prouve
+  une fuite de la base : alerte immédiate, sans modèle.
+- **Pilotage interne protégé** : `/internal/degraded` et `/internal/replay`
+  de `payment-api` exigent le jeton du moteur de remédiation, en plus du 404
+  renvoyé par le WAF sur `/api/internal/`.
 - **Secrets** : aucun secret en clair. HashiCorp Vault est la source de vérité ; le `.env` est rendu au déploiement par un jeton en lecture seule et ignoré par git (`docs/vault.md`).
   Requêtes SQL **paramétrées**, validation d'entrées (Pydantic), pas de secret
   dans les logs, messages d'erreur sans oracle.
@@ -206,6 +237,8 @@ Points clés de conception :
   OpenAI-compatible en production (débit, batching continu).
 - Remédiation : socket Docker → orchestrateur avec RBAC (Kubernetes + Operator),
   actions signées et journal d'audit immuable.
+- Rapports d'incident : en mémoire du moteur (perdus à son redémarrage) →
+  registre persistant ou outil de ticketing, archivage exigé par DORA.
 - SIEM : corrélation Loki → SIEM dédié (Wazuh/Elastic) avec règles de détection
   versionnées.
 - Rétention biométrique : consentement tracé (`biometric_consent_at`), sans

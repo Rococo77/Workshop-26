@@ -150,6 +150,10 @@ services:
       REGISTRATION_STARTING_BALANCE: ${REGISTRATION_STARTING_BALANCE:-1000.00}
       # Relais WebSocket temps réel (indicateur LED ESP8266, voir firmware/face-led/).
       ESP_EVENTS_TOKEN: ${ESP_EVENTS_TOKEN:-dev-only-change-me}
+      # Pilotage du mode dégradé (/internal/degraded, /internal/replay) : même
+      # jeton que détecteur -> moteur, seul le moteur de remédiation le détient.
+      REMEDIATION_API_TOKEN: ${REMEDIATION_API_TOKEN}
+      DEGRADED_MAX_MINUTES: ${DEGRADED_MAX_MINUTES:-10}
     networks: [app, data, biometric]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
