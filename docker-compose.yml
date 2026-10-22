@@ -343,9 +343,11 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     ports:
-      # Tableau de supervision pour le jury (observation, pas gestion métier).
-      # Même interface que le WAF (EDGE_BIND) ; port configurable via GRAFANA_PORT.
-      - "${EDGE_BIND:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
+      # TOUJOURS local au PC Hôte (comme Vault et le RAG) : l'interface Grafana a
+      # son propre login -> cible de force brute si elle était publiée sur le
+      # réseau du groupe. Non exposée (sujet §4) ; consultée sur le PC Hôte.
+      # La supervision destinée au jury passe par le dashboard React via le WAF.
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     networks: [obs]
     logging: *default-logging
     labels:
