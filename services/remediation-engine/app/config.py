@@ -28,5 +28,8 @@ RESTARTABLE_CONTAINERS: frozenset[str] = frozenset({"ra-payment-api", "ra-auth",
 # Playbooks connus. Un type d'incident inconnu est journalisé mais n'entraîne
 # aucune action privilégiée (principe de moindre surprise / moindre privilège).
 KNOWN_PLAYBOOKS: frozenset[str] = frozenset(
-    {"dos_flood", "service_unavailable", "injection_attempt"}
+    {"dos_flood", "service_unavailable", "injection_attempt", "honeytoken_triggered"}
 )
+
+# Services qui portent les pièges honeytokens (journal "HONEYTOKEN ... ip=").
+HONEYTOKEN_CONTAINERS: tuple[str, ...] = ("ra-auth", "ra-payment-api")

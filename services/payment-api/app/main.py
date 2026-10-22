@@ -22,6 +22,7 @@ from fastapi import (
     Depends,
     FastAPI,
     HTTPException,
+    Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
@@ -31,7 +32,7 @@ from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
-from . import accounts, biometrics, db, events, face, service
+from . import accounts, biometrics, db, events, face, honeytokens, service
 from .auth import Principal, create_access_token, current_customer, current_pending_face
 from .config import settings
 from .metrics import FACE_LATENCY, FACE_VERIFICATIONS, PAYMENT_TX, MetricsMiddleware
@@ -51,6 +52,8 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="Resilience-Alpha Payment API", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(MetricsMiddleware)
+# Ajouté en dernier = exécuté en premier : voit toutes les réponses, même les 500.
+app.add_middleware(honeytokens.ExfiltrationGuard)
 
 # Comptes canari : utilisateurs verrouillés _canary_src / _canary_dst (seed ou
 # migration 06), jamais connectés ; voir service.canary_route().
@@ -274,7 +277,10 @@ def my_accounts(principal: Principal = Depends(current_customer)) -> list[dict]:
 
 @app.post("/transactions", status_code=status.HTTP_201_CREATED)
 def create_transaction(
-    req: TransferRequest, response: Response, principal: Principal = Depends(current_customer)
+    req: TransferRequest,
+    request: Request,
+    response: Response,
+    principal: Principal = Depends(current_customer),
 ) -> dict:
     """Validation faciale active : crée un virement `pending` (202), réglé
     seulement par /transactions/{id}/confirm. Sinon : règlement immédiat (201)."""
@@ -287,11 +293,28 @@ def create_transaction(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "provide either dst_account or dst_iban"
         )
 
-    if settings.face_confirmation_required:
-        return _create_pending(req, amount, principal, response)
-
     try:
         dst_account = req.dst_account or service.account_id_by_iban(req.dst_iban)
+        if honeytokens.is_honey_account(dst_account):
+            # Bénéficiaire = compte leurre : son IBAN ne se trouve que dans la base.
+            honeytokens.trigger(
+                "transfer", request.headers.get("x-real-ip"), f"user={principal.username}"
+            )
+            raise service.BusinessError("destination account not found")
+    except service.BusinessError as exc:
+        PAYMENT_TX.labels(result="rejected").inc()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except Exception as exc:
+        PAYMENT_TX.labels(result="error").inc()
+        log.error("destination lookup failed: %s", exc)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "transfer backend unavailable"
+        ) from exc
+
+    if settings.face_confirmation_required:
+        return _create_pending(req, dst_account, amount, principal, response)
+
+    try:
         tx = service.transfer(
             username=principal.username,
             src_account=req.src_account,
@@ -317,12 +340,15 @@ def create_transaction(
 
 
 def _create_pending(
-    req: TransferRequest, amount: Decimal, principal: Principal, response: Response
+    req: TransferRequest,
+    dst_account: int,
+    amount: Decimal,
+    principal: Principal,
+    response: Response,
 ) -> dict:
     try:
         if biometrics.get_enrollment(principal.username) is None:
             raise _face_error(status.HTTP_403_FORBIDDEN, "face_not_enrolled")
-        dst_account = req.dst_account or service.account_id_by_iban(req.dst_iban)
         tx = service.create_pending(
             username=principal.username,
             src_account=req.src_account,

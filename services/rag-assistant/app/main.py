@@ -11,13 +11,18 @@ Dégradation maîtrisée : si Ollama est indisponible, l'API répond proprement
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import threading
+import urllib.error
+import urllib.request
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("rag")
@@ -26,10 +31,30 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M")
 EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "nomic-embed-text")
 CORPUS_DIR = os.getenv("CORPUS_DIR", "/app/corpus")
+# Rapports d'incident (lecture seule) : GET /reports/{id} du moteur de remédiation.
+REMEDIATION_URL = os.getenv("REMEDIATION_URL", "http://remediation-engine:9000")
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
-app = FastAPI(title="Resilience-Alpha RAG Assistant", version="1.0.0")
-_retriever = None  # construit paresseusement
+_retriever = None  # construit au démarrage (thread), sinon à la première requête
+
+
+def _warm() -> None:
+    """Indexation du corpus (~2 min sur CPU) dès le démarrage : la première
+    question ou le premier résumé d'incident n'attend pas l'index."""
+    global _retriever
+    try:
+        _retriever = _build_retriever()
+    except Exception as exc:  # Ollama pas encore prêt : index construit à la demande
+        log.warning("préchauffage de l'index impossible: %s", exc)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    threading.Thread(target=_warm, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Resilience-Alpha RAG Assistant", version="1.0.0", lifespan=_lifespan)
 
 
 class Question(BaseModel):
@@ -140,4 +165,55 @@ def ask(question: Question) -> Answer:
         return Answer(answer=answer, sources=sources)
     except Exception as exc:
         log.error("RAG indisponible: %s", exc)
+        raise HTTPException(503, f"assistant indisponible (Ollama requis): {exc}") from exc
+
+
+class ReportRequest(BaseModel):
+    report_id: str = Field(pattern=r"^INC-[0-9]{8}-[0-9]{6}-[a-z_]+$")
+
+
+@app.post("/incident-summary")
+def incident_summary(req: ReportRequest) -> dict:
+    """Résumé pour la direction d'un incident, rédigé depuis le rapport du
+    moteur de remédiation. Lecture seule : un GET sur le journal, aucune
+    action possible sur le système. Les faits viennent du rapport, le
+    corpus ne sert qu'à rappeler la procédure qui s'applique."""
+    global _retriever
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_ollama import ChatOllama
+
+    try:
+        # URL interne fixe (variable d'environnement), identifiant validé par le schéma.
+        url = f"{REMEDIATION_URL}/reports/{req.report_id}"
+        with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310  # nosec B310
+            report = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(exc.code, "rapport introuvable") from exc
+    except (urllib.error.URLError, ValueError) as exc:
+        raise HTTPException(503, "moteur de remédiation injoignable") from exc
+
+    try:
+        if _retriever is None:
+            _retriever = _build_retriever()
+        procedure = "\n\n".join(
+            d.page_content for d in _retriever.invoke(f"procédure {report['nature']}")[:3]
+        )
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Tu rédiges, en français, le résumé d'un incident pour la direction "
+                    "d'un établissement de paiement. 6 à 8 phrases simples, sans jargon : "
+                    "ce qui s'est passé, l'impact, la réponse automatique, le temps de "
+                    "reprise, puis ce qu'il reste à faire par un humain. Utilise UNIQUEMENT "
+                    "les faits du rapport ; n'invente aucun chiffre. /no_think",
+                ),
+                ("human", "Rapport :\n{report}\n\nProcédure applicable :\n{procedure}"),
+            ]
+        )
+        llm = ChatOllama(base_url=OLLAMA_BASE_URL, model=OLLAMA_MODEL, temperature=0)
+        resp = (prompt | llm).invoke({"report": report["markdown"], "procedure": procedure})
+        return {"report_id": req.report_id, "summary": _THINK.sub("", resp.content).strip()}
+    except Exception as exc:
+        log.error("résumé d'incident indisponible: %s", exc)
         raise HTTPException(503, f"assistant indisponible (Ollama requis): {exc}") from exc

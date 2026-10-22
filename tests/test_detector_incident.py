@@ -37,6 +37,7 @@ def test_point_anormal_isole_sans_incident(monkeypatch):
     sent = []
     verdicts = iter([True, False, True, True])
     monkeypatch.setattr(detector, "_service_down", lambda c: False)
+    monkeypatch.setattr(detector.sources, "honeytoken_kinds", lambda c: [])
     monkeypatch.setattr(detector.sources, "collect_features", lambda c: {})
     monkeypatch.setattr(detector.sources, "classify_attack", lambda c: "dos_flood")
     monkeypatch.setattr(detector._model, "score", lambda f: (next(verdicts), 0.6, {}))
@@ -53,3 +54,19 @@ def test_point_anormal_isole_sans_incident(monkeypatch):
     assert sent == []
     detector._tick(None)  # anormal (2/2) : incident confirmé
     assert sent == ["dos_flood"]
+
+
+def test_honeytoken_incident_immediat_sans_ml(monkeypatch):
+    """Compte leurre utilisé : incident dès le premier point, le modèle n'est
+    pas consulté (aucun usage légitime possible)."""
+    sent = []
+    monkeypatch.setattr(detector, "_service_down", lambda c: False)
+    monkeypatch.setattr(detector.sources, "honeytoken_kinds", lambda c: ["login"])
+    monkeypatch.setattr(detector._model, "score", lambda f: pytest.fail("ML consulté"))
+    monkeypatch.setattr(detector, "_send_incident", lambda c, p: sent.append(p))
+    monkeypatch.setattr(detector, "_open_incident", None)
+    monkeypatch.setattr(detector, "_last_sent", 0.0)
+
+    detector._tick(None)
+    assert [p["type"] for p in sent] == ["honeytoken_triggered"]
+    assert "login" in sent[0]["detail"]

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, generate_latest
 from pydantic import BaseModel, Field
@@ -23,6 +23,9 @@ app = FastAPI(title="Resilience-Alpha Auth", version="1.0.0")
 
 LOGIN_ATTEMPTS = Counter("auth_login_attempts_total", "Tentatives de connexion", ["result"])
 LOGIN_FAILURES = Counter("auth_login_failures_total", "Échecs de connexion", ["reason"])
+# Série créée à 0 au démarrage : sans elle, increase() ignore le premier déclenchement.
+HONEYTOKEN = Counter("honeytoken_triggers_total", "Comptes leurres utilisés", ["kind"])
+HONEYTOKEN.labels(kind="login")
 
 
 class LoginRequest(BaseModel):
@@ -53,20 +56,31 @@ def metrics() -> Response:
 
 
 @app.post("/login")
-def login(req: LoginRequest) -> TokenResponse | FaceRequiredResponse:
+def login(req: LoginRequest, request: Request) -> TokenResponse | FaceRequiredResponse:
     """Mot de passe seul pour operator/admin (pas de compte bancaire, pas de
     visage enrôlé). Pour un client (`customer`), le mot de passe n'ouvre
     qu'un jeton intermédiaire `face_pending` : le second facteur (visage)
     est vérifié par payment-api, seul service relié à `face-api`
     (POST /auth/login/face), qui émet alors le jeton d'accès complet."""
     try:
-        user = db.fetch_user(req.username)
+        honeytoken = db.is_honeytoken(req.username)
+        user = None if honeytoken else db.fetch_user(req.username)
     except Exception as exc:  # indisponibilité base -> 503 explicite
         log.error("auth db unavailable: %s", exc)
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "auth backend unavailable"
         ) from exc
 
+    if honeytoken:
+        # Compte leurre : seul quelqu'un qui a lu la base le connaît. Preuve de
+        # fuite -> alerte (Prometheus + journal SIEM, IP pour le confinement).
+        # Réponse identique à un mauvais mot de passe : l'attaquant ne sait rien.
+        HONEYTOKEN.labels(kind="login").inc()
+        log.warning(
+            "HONEYTOKEN login username=%s ip=%s",
+            req.username,
+            request.headers.get("x-real-ip", "-"),
+        )
     if user is None or not verify_password(req.password, user["password_hash"]):
         LOGIN_ATTEMPTS.labels(result="failure").inc()
         LOGIN_FAILURES.labels(reason="bad_credentials").inc()

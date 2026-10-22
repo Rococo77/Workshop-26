@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from . import actions
 
@@ -22,12 +23,15 @@ log = logging.getLogger("remediation.playbooks")
 class RemediationResult:
     incident_type: str
     steps: list[str] = field(default_factory=list)
+    # Étapes horodatées : chronologie du rapport d'incident (report.py).
+    timeline: list[dict] = field(default_factory=list)
     recovered: bool = False
     contained: bool = False
 
     def step(self, msg: str) -> None:
         log.info("[%s] %s", self.incident_type, msg)
         self.steps.append(msg)
+        self.timeline.append({"ts": datetime.now(UTC).isoformat(), "msg": msg})
 
 
 def _wait_recovery(result: RemediationResult, attempts: int = 6, delay: float = 2.0) -> bool:
@@ -104,6 +108,30 @@ def handle_injection_attempt(source_ip: str | None) -> RemediationResult:
     return r
 
 
+def handle_honeytoken(source_ip: str | None) -> RemediationResult:
+    """Compte leurre utilisé = la base de comptes a fuité. Enjeu de
+    confidentialité : on confine la source et on trace ; la fuite elle-même
+    ne se « répare » pas, elle se traite par des humains (investigation,
+    rotation des secrets, notifications)."""
+    r = RemediationResult("honeytoken_triggered")
+    r.step("compte leurre utilisé : preuve d'une fuite de la base de comptes")
+    source_ip = source_ip or actions.honeytoken_source_ip()
+    if source_ip:
+        ok = actions.block_ip(source_ip)
+        r.step(f"blocage IP source {source_ip} au WAF: {'OK' if ok else 'ÉCHEC'}")
+    else:
+        r.step("source non attribuable (passerelle Docker) : blocage IP impossible")
+    # Le leurre n'ouvre aucun accès (connexion et virement refusés) : confiné.
+    r.contained = True
+    r.recovered = actions.verify_canary()
+    r.step(f"intégrité du service: canari {'OK' if r.recovered else 'KO'}")
+    r.step(
+        "à traiter par l'équipe : origine de la fuite, rotation des secrets (Vault), "
+        "notification CNIL / autorité (DORA)"
+    )
+    return r
+
+
 def dispatch(incident_type: str, service: str, source_ip: str | None) -> RemediationResult:
     if incident_type == "dos_flood":
         return handle_dos_flood(source_ip, service)
@@ -111,6 +139,8 @@ def dispatch(incident_type: str, service: str, source_ip: str | None) -> Remedia
         return handle_service_unavailable(service)
     if incident_type == "injection_attempt":
         return handle_injection_attempt(source_ip)
+    if incident_type == "honeytoken_triggered":
+        return handle_honeytoken(source_ip)
     # Inconnu : aucune action privilégiée.
     r = RemediationResult(incident_type)
     r.step("type d'incident inconnu — aucune action automatique (garde-fou)")

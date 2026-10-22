@@ -36,3 +36,9 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "Pic d'échecs d'authentification (brute force probable)"
+
+      - alert: HoneytokenTriggered
+        expr: sum(increase(honeytoken_triggers_total[1m])) > 0
+        labels: { severity: critical }
+        annotations:
+          summary: "Compte leurre utilisé : fuite de données probable"

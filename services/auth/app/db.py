@@ -48,3 +48,16 @@ def has_face_enrollment(username: str) -> bool:
             (username,),
         ).fetchone()
     return bool(row["enrolled"])
+
+
+def is_honeytoken(username: str) -> bool:
+    """Compte leurre (table `honeytoken`, migration 07) : personne ne s'en sert.
+    Base non migrée : aucun leurre, la connexion ne doit pas tomber pour autant."""
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM honeytoken WHERE value = %s) AS hit", (username,)
+            ).fetchone()
+    except psycopg.errors.UndefinedTable:
+        return False
+    return bool(row["hit"])
