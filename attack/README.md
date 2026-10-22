@@ -14,7 +14,9 @@ Prérequis : Python 3 (bibliothèque standard uniquement, aucune dépendance).
 
 | Script | Attaque | Effet attendu | Réponse automatique |
 |--------|---------|---------------|---------------------|
-| `flood.py` | Déni de service applicatif (flood HTTP) | ↑ req/s, ↑ latence p95, 429 | Détection `dos_flood` → blocage IP au WAF + canari |
+| `flood.py --scenario business` (défaut) | DoS sur le **chemin métier** (`/auth/login` hit base + `/api/transactions` rejeté 401) | ↑ req/s, ↑ p95, ↑ `auth_login_failures_total`, 429 | Détection `dos_flood` → blocage IP + **mode dégradé** : les virements **légitimes** (vraie transaction cliente) sont mis en file puis rejoués |
+| `flood.py --scenario face` | Force brute sur la **biométrie** (`/api/auth/login/face`) | **Surtout des 429** (zone WAF 2 r/s) ; les rares passées en 401/403 (pas de jeton `face_pending`) | Limite WAF tient, auth faciale résiste |
+| `flood.py --scenario health` | Flood léger (`/api/health`) | ↑ req/s (ne touche pas le métier) | Comparaison / sanity-check |
 | `sqli.py` | Injection SQL sur l'auth | 403 (CRS), aucune injection réussie | Détection `injection_attempt` → confinement IP |
 | `exfil.py` | Accès interne / exfiltration | 404 / 401 / limit borné | Exposition maîtrisée, trace pour investigation |
 | `leak_replay.py` | Réutilisation d'identifiants fuités (contient des comptes leurres) | 401 | Détection `honeytoken_triggered` sans ML → blocage IP, rapport d'incident |
@@ -22,8 +24,11 @@ Prérequis : Python 3 (bibliothèque standard uniquement, aucune dépendance).
 ## Exemples
 
 ```bash
-# Déni de service contrôlé (scénario principal de la démo)
+# DoS sur le chemin métier = scénario principal de la démo (défaut)
 python3 flood.py --target http://192.168.137.1:8080 --duration 40 --workers 50
+
+# Force brute biométrie : prouve la limite WAF (2 r/s) et la résistance de l'auth faciale
+python3 flood.py --target http://192.168.137.1:8080 --scenario face --duration 20
 
 # Injection SQL (résistance applicative + WAF)
 python3 sqli.py  --target http://192.168.137.1:8080 --rounds 60
@@ -38,9 +43,11 @@ python3 leak_replay.py --target http://192.168.137.1:8080
 ## Déroulé de démonstration recommandé (Clip Chrono / live)
 
 1. **Avant** : une transaction réussit depuis le front (service nominal).
-2. **Attaque** : lancer `flood.py` depuis le PC Attaquant.
+2. **Attaque** : lancer `flood.py` (défaut = chemin métier) depuis le PC Attaquant.
 3. **Détection** : le score d'anomalie ML grimpe, un incident `dos_flood` est émis.
-4. **Remédiation** : l'IP attaquante est bloquée au WAF (visible dans le dashboard).
-5. **Vérification** : transaction canari OK → une nouvelle transaction réussit.
+4. **Remédiation** : l'IP attaquante est bloquée au WAF + passage en **mode dégradé**
+   (les virements légitimes sont mis en file pendant la perturbation).
+5. **Vérification** : transaction canari OK → la file est rejouée → une nouvelle
+   transaction réussit.
 
 Aucune intervention corrective humaine entre les étapes 2 et 5.
