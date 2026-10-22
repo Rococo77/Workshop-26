@@ -324,21 +324,24 @@ def login_password(req: PasswordStep, principal: Principal = Depends(current_pen
         settings.login_lockout_failures
     ):
         log.warning("login lockout user=%s", user)
+        events.publish({"purpose": "login", "state": "locked"})
         raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "login_locked")
+
+    events.publish({"purpose": "login", "state": "checking"})
 
     row = db.verify_login_password(user, req.password)
     if row is None or not row["ok"]:
         biometrics.log_attempt(user, purpose="login", result="password_mismatch", distance=None)
-        events.publish({"ok": False, "purpose": "login"})
+        events.publish({"purpose": "login", "state": "fail"})
         left = settings.login_lockout_failures - biometrics.recent_failures(
             user, settings.login_lockout_minutes, purpose="login"
         )
         raise _face_error(status.HTTP_401_UNAUTHORIZED, "invalid_credentials", attempts_left=max(0, left))
     if row["locked"]:
-        events.publish({"ok": False, "purpose": "login"})
+        events.publish({"purpose": "login", "state": "locked"})
         raise HTTPException(status.HTTP_403_FORBIDDEN, "account locked")
 
-    events.publish({"ok": True, "purpose": "login"})
+    events.publish({"purpose": "login", "state": "ok"})
     token = create_access_token(subject=user, role=principal.role)
     return {"access_token": token, "token_type": "bearer", "role": principal.role}
 
@@ -453,6 +456,7 @@ def confirm_transaction(
             settings.face_lockout_failures
         ):
             log.warning("face lockout user=%s tx=%s", user, tx_id)
+            events.publish({"purpose": "confirm", "state": "locked"})
             raise _face_error(status.HTTP_429_TOO_MANY_REQUESTS, "face_locked")
         enrollment = biometrics.get_enrollment(user)
     except HTTPException:
@@ -463,9 +467,13 @@ def confirm_transaction(
         log.error("confirm lookup failed: %s", exc)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "backend unavailable") from exc
 
+    events.publish({"purpose": "confirm", "state": "checking"})
+
     if enrollment is None:
+        events.publish({"purpose": "confirm", "state": "fail"})
         raise _face_error(status.HTTP_403_FORBIDDEN, "face_not_enrolled")
     if enrollment["model_name"] != settings.face_model:
+        events.publish({"purpose": "confirm", "state": "fail"})
         raise _face_error(status.HTTP_409_CONFLICT, "face_reenrollment_required")
 
     distance: float | None = None
@@ -476,6 +484,7 @@ def confirm_transaction(
     except face.FaceRejected as exc:
         if exc.code != "spoof":
             # Photo inexploitable (pas de visage, floue...) : pas d'essai consommé.
+            events.publish({"purpose": "confirm", "state": "idle"})
             raise _face_error(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code) from exc
         result = "spoof"
 
@@ -488,7 +497,7 @@ def confirm_transaction(
         result,
         f"{distance:.4f}" if distance is not None else "-",
     )
-    events.publish({"ok": result == "match", "purpose": "confirm"})
+    events.publish({"purpose": "confirm", "state": "ok" if result == "match" else "fail"})
 
     if result != "match":
         FACE_VERIFICATIONS.labels(purpose="confirm", result=result).inc()

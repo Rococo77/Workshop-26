@@ -194,41 +194,46 @@ conforme produirait un flux qui *a l'air* correct sans l'être.
         démo existant sans te le demander) — seulement couvert par les tests unitaires. À faire
         pendant la recette (Phase 2) avec un compte jetable.
 
-### 1.5 — LED ESP8266 en 5 états
+### 1.5 — LED ESP8266 en 5 états ✅ FAIT
 
-- **Écart actuel** : `firmware/face-led/src/main.cpp` n'a que deux états fixes (vert/rouge,
-  10 s, `LED_ON_DURATION_MS`, ligne 24) sans clignotement, et rien n'est émis pour l'étape
-  mot de passe.
-- **États cibles** (à confirmer précisément avec le §10.1, formulation du relevé) :
-  1. Éteinte (repos)
-  2. Vert clignotant (en cours de vérification / attente)
-  3. Vert fixe 30 s (succès)
-  4. Rouge clignotant ×10 (échec, nombre de clignotements fini)
-  5. Rouge fixe 30 s (blocage / échec terminal)
+- **Écart initial** : `firmware/face-led/src/main.cpp` n'avait que deux états fixes (vert/rouge,
+  10 s) sans clignotement, et rien n'était émis pour l'étape mot de passe.
+- **États implémentés** : `idle` (éteinte), `checking` (vert clignotant, 300 ms), `ok` (vert
+  fixe 30 s), `fail` (rouge clignotant ×10 puis éteinte), `locked` (rouge fixe 30 s). Détail des
+  déclencheurs : `firmware/face-led/README.md`.
 - **Actions** :
-  - [ ] Étendre le protocole WebSocket `payment-api` → ESP8266 : le JSON `{"ok": bool,
-        "purpose": ...}` actuel ne suffit pas à distinguer 5 états ; ajouter un champ genre
-        `"state": "idle"|"checking"|"ok"|"fail"|"locked"`.
-  - [ ] Réécrire `setLeds`/`loop()` dans `main.cpp` pour gérer blink (vert clignotant continu,
-        rouge clignotant ×10 puis extinction, durées 30 s pour les fixes) sans bloquer
-        `webSocket.loop()` (pas de `delay()` long dans `loop()`, utiliser un état-machine
-        non bloquante comme déjà fait pour `ledTimerActive`).
-  - [ ] Propager l'événement "mot de passe" si le nouvel ordre des facteurs (1.1) en a besoin.
-  - [ ] Mettre à jour `firmware/face-led/README.md` (câblage/comportement) en conséquence.
+  - [x] Protocole WebSocket étendu : `{"purpose": "login"|"confirm", "state": "idle"|"checking"|
+        "ok"|"fail"|"locked"}` (remplace l'ancien `{"ok": bool, "purpose": ...}`), publié aux
+        points clés de `login_face`, `login_password` (nouveau : `checking` avant vérification)
+        et `confirm_transaction` (`services/payment-api/app/main.py`).
+  - [x] `main.cpp` réécrit : état-machine non bloquante (`enterState`/`updateLeds`, `millis()`,
+        pas de `delay()` dans `loop()`) gérant les 5 états, y compris les 10 clignotements
+        comptés et les 2 affichages fixes de 30 s.
+  - [x] Étape mot de passe propagée : `checking` à l'entrée de `login_password`, `ok` si la
+        connexion aboutit, `fail`/`locked` sinon — cohérent avec l'ordre des facteurs (1.1).
+  - [x] `firmware/face-led/README.md` mis à jour (tableau des 5 états, build/flash, vérification).
+  - [x] Build + upload réels sur la carte (COM5, PlatformIO Core) : succès. Cycle complet testé
+        en conditions réelles (requête HTTP → WebSocket → LED) via le moniteur série : capture
+        confirmée de `[ws] purpose=login state=checking` puis `state=fail` suite à un login
+        échoué déclenché en direct. **Bug trouvé en testant** : j'avais oublié de reconstruire
+        et redéployer le conteneur `payment-api` après avoir changé le protocole — corrigé.
+  - [x] Tests Python : suite complète inchangée et toujours verte (**75 passed, 4 skipped**,
+        `events.publish` reste agnostique du contenu, aucune régression).
 
 ### 1.6 — Points à vérifier sur place (pas du code à écrire, de la vérification physique)
 
 - [ ] **Wi-Fi ESP8266** : confirmer sur le terrain que `firmware/face-led/include/secrets.h`
       pointe vers le SSID `RESILIENCE-G<n>` attendu (fichier volontairement gitignored —
       `firmware/*/include/secrets.h` dans `.gitignore` — donc à vérifier en lecture directe sur
-      la carte/le poste de flash, pas dans le dépôt).
-  - [ ] Vérifier aussi que `secrets.example.h` documente bien le format attendu pour un
-        relecteur qui n'a pas accès au vrai `secrets.h`.
-- [ ] **Outils imposés (CLion + PlatformIO)** : `firmware/face-led/platformio.ini` existe déjà.
-      Préparer une démo courte (ouvrir le projet dans CLion avec le plugin PlatformIO, build +
-      upload depuis l'IDE) à montrer pendant la recette ou le live, pas seulement en ligne de
-      commande (`make flash-esp` existe déjà, Makefile:41, mais ne prouve pas l'usage de
-      l'IDE imposé).
+      la carte/le poste de flash, pas dans le dépôt). **Vérifié pour le poste actuel** :
+      `secrets.h` est bien configuré, mais pour le réseau Wi-Fi courant (`myDiL`), pas encore
+      pour le hotspot `RESILIENCE-G1` du jour J — à reconfigurer avant/pendant la recette.
+- [x] ~~**Outils imposés (CLion + PlatformIO)**~~ → **CLion abandonné** : le plugin PlatformIO
+      for CLion n'a pas pu être mis en route côté utilisateur. Seul **PlatformIO Core en ligne
+      de commande** (`pio run`, `pio run -t upload`, `pio device monitor`) est utilisé et
+      vérifié — c'est d'ailleurs ce que j'ai utilisé pour flasher/tester 1.5. **Écart à assumer
+      et signaler tel quel** vis-à-vis du §10.1 si le sujet exige explicitement l'IDE CLion (pas
+      seulement l'outil PlatformIO) ; documenté dans `firmware/face-led/README.md`.
 
 ---
 
